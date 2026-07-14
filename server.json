@@ -1,0 +1,53 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.brunovicco/openfinance-br-mcp",
+  "description": "MCP server exposing Brazilian Open Finance (Banco Central do Brasil) APIs as tools for Claude - accounts, balances, transactions, PIX, credit cards, and investments across 10 banks, via FAPI-BR (private_key_jwt, PAR/JAR, PKCE, mTLS).",
+  "repository": {
+    "url": "https://github.com/brunovicco/openfinance-br-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "openfinance-br-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ENVIRONMENT",
+          "description": "'mock' (default, no credentials needed - runs entirely in-memory), 'sandbox', or 'production'",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string",
+          "default": "mock"
+        },
+        {
+          "name": "CLIENT_ID",
+          "description": "Client ID registered with the participating institution. Required unless ENVIRONMENT=mock",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "CLIENT_SECRET",
+          "description": "Client secret corresponding to CLIENT_ID. Required unless ENVIRONMENT=mock",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "description": "Required only when calling list_transactions with categorize=true (DSPy transaction categorization)",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

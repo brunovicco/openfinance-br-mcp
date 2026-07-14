@@ -1,5 +1,7 @@
 **English** · [Português](README.pt-BR.md)
 
+<!-- mcp-name: io.github.brunovicco/openfinance-br-mcp -->
+
 # openfinance-br-mcp
 
 > MCP Server for **Open Finance Brasil** - connects Claude directly to the Banco Central APIs, covering Fases 2, 3, and 4.
