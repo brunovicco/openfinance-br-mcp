@@ -1,0 +1,302 @@
+"""Application context and lifespan for the MCP server.
+
+Centralizes the dependency graph (TokenStore → HTTP client → Adapters
+→ Categorizer). FastMCP injects the ``AppContext`` instance into every
+tool call via ``ctx.request_context.lifespan_context``.
+
+Adapter construction branches on ``settings.environment``:
+  - 'mock' (default): in-memory MockOpenFinanceAdapter per bank, no
+    network access or credentials required.
+  - 'sandbox'/'production': real adapters, with base URLs resolved via
+    DirectoryClient against the live Directory of Participants. A
+    per-bank resolution failure is logged and falls back to that
+    adapter's hardcoded default URL rather than failing server
+    startup entirely - one bank's directory hiccup shouldn't take down
+    every other bank.
+
+Example:
+    >>> mcp = FastMCP("openfinance-br-mcp", lifespan=app_lifespan)
+    >>> @mcp.tool()
+    ... async def my_tool(ctx: AppRequestContext) -> str:
+    ...     app = ctx.request_context.lifespan_context
+    ...     return app.adapters["nubank"].bank_id
+"""
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+import httpx
+import structlog
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.session import ServerSession
+from starlette.requests import Request
+
+from openfinance_br_mcp.adapters.banco_do_brasil import BancoDoBrasilAdapter
+from openfinance_br_mcp.adapters.base import BankAdapter
+from openfinance_br_mcp.adapters.bradesco import BradescoAdapter
+from openfinance_br_mcp.adapters.btg import BTGAdapter
+from openfinance_br_mcp.adapters.caixa import CaixaAdapter
+from openfinance_br_mcp.adapters.default_adapter import DefaultOpenFinanceAdapter
+from openfinance_br_mcp.adapters.itau import ItauAdapter
+from openfinance_br_mcp.adapters.mock_adapter import MockOpenFinanceAdapter
+from openfinance_br_mcp.adapters.nubank import NubankAdapter
+from openfinance_br_mcp.adapters.picpay import PicPayAdapter
+from openfinance_br_mcp.adapters.santander import SantanderAdapter
+from openfinance_br_mcp.adapters.sicoob import SicoobAdapter
+from openfinance_br_mcp.adapters.xp import XPAdapter
+from openfinance_br_mcp.auth.authorization_session import AuthorizationSessionStore
+from openfinance_br_mcp.auth.consent import ConsentManager
+from openfinance_br_mcp.auth.redis_backend import RedisStore
+from openfinance_br_mcp.auth.store_protocol import InMemoryStore, KeyValueStore
+from openfinance_br_mcp.auth.token import TokenStore
+from openfinance_br_mcp.config import settings
+from openfinance_br_mcp.directory.client import DirectoryClient
+from openfinance_br_mcp.exceptions import DirectoryError
+from openfinance_br_mcp.tools.categorizer import TransactionCategorizer, get_categorizer
+
+log = structlog.get_logger(__name__)
+
+
+class _AdapterFactory(Protocol):
+    """Shape of a concrete adapter's constructor.
+
+    DefaultOpenFinanceAdapter.__init__ itself requires base_url/
+    token_endpoint (it has no institution to default to) - but every
+    concrete subclass (NubankAdapter, SicoobAdapter, CaixaAdapter)
+    re-declares __init__ with its own defaults for both. This Protocol
+    describes that actual, shared call shape so _build_real_adapters
+    can construct an adapter with only some kwargs supplied, which
+    `dict[str, type[DefaultOpenFinanceAdapter]]` cannot express (that
+    would type-check against the parent's stricter, default-less
+    signature instead).
+    """
+
+    def __call__(
+        self,
+        token_store: TokenStore,
+        http_client: httpx.AsyncClient,
+        *,
+        base_url: str = ...,
+        token_endpoint: str = ...,
+    ) -> DefaultOpenFinanceAdapter: ...
+
+
+_ADAPTER_CLASSES: dict[str, _AdapterFactory] = {
+    "nubank": NubankAdapter,
+    "sicoob": SicoobAdapter,
+    "caixa": CaixaAdapter,
+    "banco_do_brasil": BancoDoBrasilAdapter,
+    "bradesco": BradescoAdapter,
+    "itau": ItauAdapter,
+    "santander": SantanderAdapter,
+    "xp": XPAdapter,
+    "picpay": PicPayAdapter,
+    "btg": BTGAdapter,
+}
+
+
+@dataclass
+class AppContext:
+    """Shared dependencies available to every MCP tool call.
+
+    Attributes:
+        http_client: Shared HTTP client, configured with mTLS when enabled.
+        token_store: OAuth2 token store shared by all adapters - backed
+            by Redis when settings.redis_url is set, otherwise in-memory
+            (see _build_shared_store).
+        adapters: Registry of bank adapters, keyed by bank_id.
+        categorizer: DSPy-based transaction categorizer.
+        consent_manager: Manages consent creation/status/revocation
+            against each bank's Consents API.
+        authorization_sessions: Bridges start_consent and
+            complete_consent across the two separate tool calls a
+            single consent flow requires (see tools/consent.py).
+        directory: Shared DirectoryClient for resolving real bank
+            endpoints. None in mock mode, where there is nothing to
+            resolve.
+        pix_idempotency_cache: Cache of ``{idempotency_key: serialized_result}``
+            for ``initiate_pix``, scoped to the server process lifetime.
+    """
+
+    http_client: httpx.AsyncClient
+    token_store: TokenStore
+    adapters: dict[str, BankAdapter]
+    categorizer: TransactionCategorizer
+    consent_manager: ConsentManager
+    authorization_sessions: AuthorizationSessionStore
+    directory: DirectoryClient | None
+    pix_idempotency_cache: dict[str, str] = field(default_factory=dict)
+
+
+AppRequestContext = Context[ServerSession, AppContext, Request]
+"""Fully-parameterized Context type for use as a tool's ``ctx`` parameter."""
+
+
+def _build_http_client() -> httpx.AsyncClient:
+    """Builds the shared HTTP client used by all bank adapters.
+
+    mTLS is skipped in mock mode even if MTLS_ENABLED=true (its
+    default): MockOpenFinanceAdapter never dereferences this client,
+    and loading a client cert that doesn't exist on disk (the common
+    case for a fresh mock-mode checkout) would otherwise crash server
+    startup for a client that's never actually used.
+
+    Returns:
+        AsyncClient configured with HTTP/2 and, when applicable, mTLS.
+    """
+    kwargs: dict[str, Any] = {
+        "timeout": settings.http_timeout_seconds,
+        "http2": True,
+    }
+    if settings.mtls_enabled and settings.environment != "mock":
+        kwargs["cert"] = (settings.mtls_cert_path, settings.mtls_key_path)
+    return httpx.AsyncClient(**kwargs)
+
+
+def _build_shared_store() -> KeyValueStore:
+    """Builds the store shared by TokenStore and ConsentManager.
+
+    Returns:
+        A RedisStore when settings.redis_url is configured (shared
+        across Kubernetes replicas), otherwise an InMemoryStore
+        (single-process only - correct for mock mode and local dev).
+    """
+    if settings.redis_url is not None:
+        log.info("shared_store_backend", backend="redis")
+        return RedisStore(settings.redis_url)
+    log.info("shared_store_backend", backend="in-memory")
+    return InMemoryStore()
+
+
+async def _build_mock_adapters() -> dict[str, BankAdapter]:
+    """Builds in-memory mock adapters for every known bank.
+
+    Returns:
+        Dictionary of MockOpenFinanceAdapter instances, keyed by bank_id.
+    """
+    return {bank_id: MockOpenFinanceAdapter(bank_id) for bank_id in _ADAPTER_CLASSES}
+
+
+async def _build_real_adapters(
+    token_store: TokenStore, http_client: httpx.AsyncClient, directory: DirectoryClient
+) -> dict[str, BankAdapter]:
+    """Builds real adapters, resolving base URLs via DirectoryClient.
+
+    Args:
+        token_store: Shared token store to inject into each adapter.
+        http_client: Shared HTTP client to inject into each adapter
+            (also used, unauthenticated, for directory requests).
+        directory: Shared DirectoryClient - reused (not rebuilt here)
+            so its participants-list cache is shared with the consent
+            flow tools, which also resolve endpoints via this instance.
+
+    Returns:
+        Dictionary of real bank adapters, keyed by bank_id. Each
+        adapter's base_url and token_endpoint come from a live
+        directory resolution when it succeeds, or from that adapter's
+        hardcoded defaults when resolution fails (logged as a warning,
+        not a startup failure) - the two are resolved independently,
+        so e.g. a working base_url with a still-unresolved
+        token_endpoint is possible and falls back only on the latter.
+    """
+    adapters: dict[str, BankAdapter] = {}
+    for bank_id, adapter_cls in _ADAPTER_CLASSES.items():
+        try:
+            resolved = await directory.resolve(bank_id, "accounts")
+        except DirectoryError as exc:
+            log.warning(
+                "directory_resolution_failed",
+                bank_id=bank_id,
+                error=exc.message,
+                code=exc.code,
+                detail="Falling back to this adapter's hardcoded default base_url.",
+            )
+            adapters[bank_id] = adapter_cls(token_store, http_client)
+            continue
+
+        log.info("directory_resolution_ok", bank_id=bank_id, base_url=resolved.base_url)
+
+        try:
+            token_endpoint = await directory.resolve_token_endpoint(bank_id)
+        except DirectoryError as exc:
+            log.warning(
+                "token_endpoint_resolution_failed",
+                bank_id=bank_id,
+                error=exc.message,
+                code=exc.code,
+                detail="Falling back to this adapter's hardcoded token_endpoint.",
+            )
+            adapters[bank_id] = adapter_cls(
+                token_store, http_client, base_url=resolved.base_url
+            )
+            continue
+
+        log.info(
+            "token_endpoint_resolution_ok",
+            bank_id=bank_id,
+            token_endpoint=token_endpoint,
+        )
+        adapters[bank_id] = adapter_cls(
+            token_store,
+            http_client,
+            base_url=resolved.base_url,
+            token_endpoint=token_endpoint,
+        )
+
+    return adapters
+
+
+@asynccontextmanager
+async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+    """Builds and tears down the application's shared dependencies.
+
+    Args:
+        server: The FastMCP server instance being started.
+
+    Yields:
+        AppContext available to every tool call for the lifetime of the
+        server process.
+    """
+    http_client = _build_http_client()
+    shared_store = _build_shared_store()
+    token_store = TokenStore(store=shared_store)
+
+    directory: DirectoryClient | None = None
+    if settings.environment == "mock":
+        adapters = await _build_mock_adapters()
+    else:
+        directory_url = (
+            settings.bcb_sandbox_directory_url
+            if settings.environment == "sandbox"
+            else settings.bcb_directory_url
+        )
+        directory = DirectoryClient(http_client, base_url=str(directory_url))
+        adapters = await _build_real_adapters(token_store, http_client, directory)
+
+    categorizer = get_categorizer()
+    consent_manager = ConsentManager(http_client, store=shared_store)
+    authorization_sessions = AuthorizationSessionStore(store=shared_store)
+
+    log.info(
+        "app_context_ready",
+        environment=settings.environment,
+        banks=list(adapters),
+        transport=settings.mcp_transport,
+    )
+    try:
+        yield AppContext(
+            http_client=http_client,
+            token_store=token_store,
+            adapters=adapters,
+            categorizer=categorizer,
+            consent_manager=consent_manager,
+            authorization_sessions=authorization_sessions,
+            directory=directory,
+        )
+    finally:
+        await http_client.aclose()
+        if isinstance(shared_store, RedisStore):
+            await shared_store.aclose()
+        log.info("app_context_closed")

@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# uv/venv
+.venv/
+.uv/
+
+# Secrets - NEVER commit
+.env
+certs/*.crt
+certs/*.key
+certs/*.pem
+
+# Tests and coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Mypy
+.mypy_cache/
+
+# Ruff/Black
+.ruff_cache/
+
+# IDEs
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.tar

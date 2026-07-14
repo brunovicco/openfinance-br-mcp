@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openfinance-br-mcp"
+version = "0.1.0"
+description = "MCP server exposing Brazilian Open Finance (Banco Central do Brasil) APIs as tools for Claude"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Bruno Vicco" }]
+requires-python = ">=3.12"
+keywords = ["mcp", "open-finance", "brasil", "bcb", "banking", "anthropic"]
+dependencies = [
+    "mcp>=1.27,<2",
+    "httpx[http2]>=0.27.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "structlog>=24.2.0",
+    "cryptography>=42.0.0",
+    "dspy-ai>=2.4.14",
+    "jwcrypto>=1.5.6",
+    "anyio>=4.4.0",
+    "tenacity>=8.5.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+    "opentelemetry-instrumentation-httpx>=0.48b0",
+    "opentelemetry-instrumentation-asyncio>=0.48b0",
+    "openinference-instrumentation-dspy>=0.1.16",
+    "redis>=5.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "respx>=0.21.0",
+    "ruff>=0.5.0",
+    "black>=24.4.0",
+    "mypy>=1.10.0",
+    "pytest-cov>=5.0.0",
+    "types-jwcrypto>=1.5.0",
+    "httpx2>=2.5.0",
+]
+
+[project.scripts]
+openfinance-mcp = "openfinance_br_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openfinance_br_mcp"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+skip-string-normalization = false
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "S", "B", "A", "C4", "RET", "SIM"]
+ignore = ["S101", "S603"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["openfinance_br_mcp"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "dspy.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=openfinance_br_mcp --cov-report=term-missing --cov-fail-under=80"

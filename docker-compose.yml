@@ -1,0 +1,61 @@
+services:
+  openfinance-mcp:
+    build:
+      context: .
+      target: runtime
+    image: openfinance-br-mcp:latest
+    container_name: openfinance-mcp
+    restart: unless-stopped
+
+    # stdin_open + tty allow MCP communication over stdio
+    stdin_open: true
+    tty: true
+
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-console}
+      CLIENT_ID: ${CLIENT_ID:?CLIENT_ID is required}
+      CLIENT_SECRET: ${CLIENT_SECRET:?CLIENT_SECRET is required}
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      REDIRECT_URI: ${REDIRECT_URI:-https://localhost:8080/callback}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Unset by default - TokenStore/ConsentManager fall back to
+      # in-memory (fine for this single-instance local setup). Set to
+      # redis://redis:6379/0 (with the 'redis' profile enabled below)
+      # to exercise the same shared-store path k8s/deployment.yaml
+      # uses across its replicas.
+      REDIS_URL: ${REDIS_URL:-}
+
+    volumes:
+      # mTLS certificates mounted externally (never commit them to the repository)
+      - ./certs:/app/certs:ro
+
+    # The MCP server uses stdio - it does not expose a TCP port
+
+  # Optional: local Redis for exercising the shared TokenStore/
+  # ConsentManager backend (see auth/redis_backend.py) before deploying
+  # against the real one k8s/config-and-secrets.yaml points at. Not
+  # started by default - enable with `docker compose --profile redis up`.
+  redis:
+    image: redis:7-alpine
+    container_name: openfinance-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    profiles:
+      - redis
+
+  # Helper service: runs the tests inside the Docker environment
+  test:
+    build:
+      context: .
+      target: builder
+    image: openfinance-br-mcp:builder
+    command: >
+      sh -c "uv run pytest tests/ -v --tb=short"
+    environment:
+      CLIENT_ID: test_client_id
+      CLIENT_SECRET: test_client_secret
+      MTLS_ENABLED: "false"
+    profiles:
+      - test

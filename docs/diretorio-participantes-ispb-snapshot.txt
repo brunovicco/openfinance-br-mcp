@@ -1,0 +1,117 @@
+Open Finance Brasil - Diretório de Participantes (producao)
+Fonte: https://data.directory.openbankingbrasil.org.br/participants
+Snapshot obtido em: 2026-07-13
+Total de organizacoes: 107
+
+================================================================================
+LISTA COMPLETA - todas as organizacoes do diretorio (ordem alfabetica)
+Colunas: ISPB (RegistrationId) | Status | OrganisationName
+================================================================================
+
+(sem ISPB) | Active     | 99PAY INSTITUICAO DE PAGAMENTO S.A.
+(sem ISPB) | Active     | ACCREDITO - SOCIEDADE DE CREDITO DIRETO S.A.
+13140088   | Active     | ACESSO SOLUCOES PAGAMENTO SA
+74014747   | Active     | AGORA CTVM S.A.
+(sem ISPB) | Active     | ASA SOCIEDADE DE CREDITO FINANCIAMENTO E INVESTIMENTO S.A.
+(sem ISPB) | Active     | ASAAS GESTAO FINANCEIRA INSTITUICAO DE PAGAMENTO S.A.
+07707650   | Active     | AYMORE CFI S.A.
+(sem ISPB) | Active     | B3 INSTITUICAO DE PAGAMENTO LTDA
+04184779   | Active     | BANCO BRADESCARD
+60746948   | Active     | BANCO BRADESCO SA
+30306294   | Active     | BANCO BTG PACTUAL S.A.
+(sem ISPB) | Active     | BANCO CSF S/A
+27098060   | Active     | BANCO DIGIO
+00000000   | Active     | BANCO DO BRASIL S.A.
+45246410   | Active     | BANCO GENIAL S.A.
+30172491   | Active     | BANCO HYUNDAI CAPITAL BRASIL
+00416968   | Active     | BANCO INTER
+59285411   | Active     | BANCO PAN
+00795423   | Active     | BANCO SEMEAR
+10664513   | Active     | BCO AGIBANK S.A.
+54403563   | Active     | BCO ARBI S.A.
+28127603   | Active     | BCO BANESTES S.A.
+61186680   | Active     | BCO BMG S.A.
+07207996   | Active     | BCO BRADESCO FINANC. S.A.
+31872495   | Active     | BCO C6 S.A.
+33479023   | Active     | BCO CITIBANK S.A.
+61033106   | Active     | BCO CREFISA S.A.
+04902979   | Active     | BCO DA AMAZONIA S.A.
+13009717   | Active     | BCO DO EST. DE SE S.A.
+04913711   | Active     | BCO DO EST. DO PA S.A.
+92702067   | Active     | BCO DO ESTADO DO RS S.A.
+07237373   | Active     | BCO DO NORDESTE DO BRASIL S.A.
+31880826   | Active     | BCO GUANABARA S.A.
+33042151   | Active     | BCO LA NACION ARGENTINA
+33254319   | Active     | BCO LOSANGO S.A.
+17184037   | Active     | BCO MERCANTIL DO BRASIL S.A.
+62307848   | Active     | BCO RCI BRASIL S.A.
+68900810   | Active     | BCO RENDIMENTO S.A.
+00517645   | Active     | BCO RIBEIRAO PRETO S.A.
+58160789   | Active     | BCO SAFRA S.A.
+90400888   | Active     | BCO SANTANDER (BRASIL) S.A.
+60889128   | Active     | BCO SOFISA S.A.
+59588111   | Active     | BCO VOTORANTIM S.A.
+33264668   | Active     | BCO XP S.A.
+(sem ISPB) | Active     | Belvo Instituicao de Pagamento Ltda.
+03130170   | Active     | BRASIL CARD INSTITUICAO DE PAGAMENTOS LTDA
+00000208   | Active     | BRB - BCO DE BRASILIA S.A.
+00360305   | Active     | CAIXA ECONOMICA FEDERAL
+(sem ISPB) | Active     | CASAS BAHIA PAY INSTITUICAO DE PAGAMENTO LTDA
+(sem ISPB) | Active     | CELCOIN INSTITUICAO DE PAGAMENTO S.A.
+05463212   | Active     | CENTRAL AILOS
+01027058   | Active     | CIELO S.A.
+(sem ISPB) | Active     | CLOUDWALK INSTITUICAO DE PAGAMENTO E SERVICOS LTDA
+03795072   | Active     | CONFEDERACAO DAS COOPERATIVAS DO SICREDI - CONFEDERACAO SICREDI
+04891850   | Active     | Confederacao Nacional das Cooperativas do Sicoob
+00315557   | Active     | COOPERATIVA CENTRAL DE CREDITO UNICRED DO BRASIL - UNICRED DO BRASIL
+37554441   | Active     | COOPERATIVA DE CREDITO SICOOB UNI SUL MS
+73647935   | Active     | COOPERATIVA DE CREDITO UNIQUE BR
+37880206   | Active     | CORA SCD S.A.
+(sem ISPB) | Active     | CRED SYSTEM SOCIEDADE DE CREDITO DIRETO SA
+60779196   | Active     | CREFISA S.A. CFI
+10398952   | Active     | CRESOL CONFEDERAÇÃO
+(sem ISPB) | Active     | CUMBUCA INSTITUICAO DE PAGAMENTO LTDA
+(sem ISPB) | Active     | DATANOMIK BRASIL INSTITUICAO DE PAGAMENTO LTDA
+13370835   | Active     | DOCK INSTITUICAO DE PAGAMENTO S.A.
+21018182   | Active     | Ebanx Instituicao de Pagamento Ltda.
+09089356   | Active     | EFI S.A. - INSTITUICAO DE PAGAMENTO
+(sem ISPB) | Active     | FINNET S/A - TECNOLOGIA E INSTITUICAO DE PAGAMENTO
+(sem ISPB) | Active     | FITS INSTITUICAO DE PAGAMENTO S.A.
+10440482   | Active     | GETNET ADQUIRENCIA E SERVICOS PARA MEIOS DE PAGAMENTO S A
+(sem ISPB) | Active     | IFood Pago Instituicao de Pagamento S.A.
+(sem ISPB) | Active     | INFINIA BRASIL INSTITUICAO DE PAGAMENTO LTDA
+(sem ISPB) | Active     | Iniciador Instituicao de Pagamento Ltda
+60701190   | Active     | ITAU UNIBANCO S.A.
+(sem ISPB) | Active     | IUGU INSTITUICAO DE PAGAMENTO S.A.
+(sem ISPB) | Active     | KLAVI INSTITUICAO DE PAGAMENTO E GESTAO DE DADOS LTDA.
+(sem ISPB) | Active     | LINA INSTITUICAO DE PAGAMENTO S.A
+(sem ISPB) | Active     | LISTO SOCIEDADE DE CREDITO DIRETO S.A.
+(sem ISPB) | Active     | Magalupay Instituicao de Pagamento S.A.
+(sem ISPB) | Active     | MERCADO BITCOIN INSTITUICAO DE PAGAMENTO LTDA
+10573521   | Active     | MERCADO PAGO INSTITUICAO DE PAGAMENTO LTDA
+09464032   | Active     | MIDWAY S.A. - SCFI
+11581339   | Active     | MONEY PLUS SCMEPP LTDA
+(sem ISPB) | Active     | Neon Pagamentos
+18236120   | Active     | NU PAGAMENTOS S.A. - INSTITUICAO DE PAGAMENTO
+(sem ISPB) | Active     | Open Banking Brasil - Raidiam
+08561701   | Active     | PAGSEGURO
+(sem ISPB) | Active     | PAGUEVELOZ INSTITUICAO DE PAGAMENTO LTDA
+03311443   | Active     | PARATI - CFI S.A.
+43180355   | Active     | PEFISA S.A. - CFI
+22896431   | Active     | PICPAY
+(sem ISPB) | Active     | PINBANK BRASIL INSTITUICAO DE PAGAMENTO S/A
+(sem ISPB) | Active     | PLUGGY BRASIL INSTITUICAO DE PAGAMENTO LTDA
+(sem ISPB) | Active     | PROVER PROMOCAO DE VENDAS INSTITUICAO DE PAGAMENTO LTDA
+32402502   | Active     | QI SCD S.A.
+(sem ISPB) | Active     | QUERO-QUERO VERDECARD INSTITUICAO DE PAGAMENTO S.A.
+(sem ISPB) | Active     | REALIZE SOCIEDADE DE CREDITO, FINANCIAMENTO E INVESTIMENTO S.A.
+(sem ISPB) | Active     | RECARGAPAY INSTITUICAO DE PAGAMENTO LTDA.
+(sem ISPB) | Active     | REVOLUT SOCIEDADE DE CREDITO DIRETO S.A.
+51014223   | Active     | SANTANDER CCVM S.A.
+(sem ISPB) | Active     | Santander CTVM S.A.
+(sem ISPB) | Active     | SEFER INVESTIMENTOS DTVM LTDA
+(sem ISPB) | Active     | SHOPEE
+02398976   | Active     | SISPRIME DO BRASIL - COOPERATIVA DE CREDITO
+16501555   | Active     | STONE PAGAMENTOS S.A.
+37241230   | Active     | SUMUP SCD S.A.
+(sem ISPB) | Active     | Swap Meios de Pagamentos Instituicao de Pagamento S.A.

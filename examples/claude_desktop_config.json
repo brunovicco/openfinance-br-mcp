@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "openfinance-br": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/path/to/openfinance-br-mcp",
+        "openfinance-mcp"
+      ],
+      "env": {
+        "CLIENT_ID": "your_client_id",
+        "CLIENT_SECRET": "your_client_secret",
+        "MTLS_ENABLED": "false",
+        "LOG_FORMAT": "console",
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "DSPY_CACHE_ENABLED": "true"
+      }
+    }
+  }
+}
