@@ -44,7 +44,7 @@ def valid_token() -> TokenResponse:
 
 @pytest.fixture
 async def mock_token_store(valid_token: TokenResponse) -> TokenStore:
-    """TokenStore preloaded with a valid token for SUBJECT_ID.
+    """TokenStore preloaded with a valid token for SUBJECT_ID at 'nubank'.
 
     Args:
         valid_token: Injected token fixture.
@@ -53,7 +53,7 @@ async def mock_token_store(valid_token: TokenResponse) -> TokenStore:
         TokenStore with a valid token ready to use.
     """
     store = TokenStore()
-    await store.save(SUBJECT_ID, valid_token)
+    await store.save("nubank", SUBJECT_ID, valid_token)
     return store
 
 

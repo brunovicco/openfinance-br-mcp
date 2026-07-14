@@ -2,7 +2,7 @@
 
 # openfinance-br-mcp
 
-> MCP Server para o **Open Finance Brasil** - conecta o Claude diretamente às APIs do Banco Central, cobrindo Fases 2, 3 e 4.
+> MCP experimental para o **Open Finance Brasil**, com ambiente mock completo e implementação em evolução para integração FAPI-BR. Não certificado e ainda não validado com instituições reais, veja [VALIDATION.md](VALIDATION.md) e o plano de implementação em `IMPLEMENTATION_PLAN.md` antes de usar fora de `environment=mock`.
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
 [![uv](https://img.shields.io/badge/managed%20by-uv-blueviolet)](https://github.com/astral-sh/uv)
@@ -23,18 +23,22 @@ Claude → "Você gastou R$ 847,30 com alimentação em março..."
 
 ## Bancos suportados
 
-| Banco | ISPB | Fase 2 | Fase 3 (PIX) | Fase 4 (Investimentos) |
-|-------|------|--------|--------------|----------------------|
-| Nubank | 18236120 | ✅ | ✅ | ✅ |
-| Sicoob | 04891850 | ✅ | ✅ | ✅ |
-| Caixa Econômica | 00360305 | ✅ | ✅ | ✅ |
-| Banco do Brasil | 00000000 | ✅ | ✅ | ✅ |
-| Bradesco | 60746948 | ✅ | ✅ | ✅ |
-| Itaú Unibanco | 60701190 | ✅ | ✅ | ✅ |
-| Santander | 90400888 | ✅ | ✅ | ✅ |
-| XP | 33264668 | ✅ | ✅ | ✅ |
-| PicPay | 22896431 | ✅ | ✅ | ✅ |
-| BTG Pactual | 30306294 | ✅ | ✅ | ✅ |
+Adapters mock estão implementados para as dez instituições abaixo, cada um retorna dados de exemplo realistas, em memória, sem exigir credenciais ou acesso à rede, e é hoje a principal forma de explorar este projeto. O suporte real (não-mock) é experimental: ainda não foi exercitado contra sandbox ou produção de nenhum banco, não possui certificação FAPI-BR, e diversos endpoints/paths ainda estão sendo alinhados às especificações OpenAPI oficiais (acompanhe em `IMPLEMENTATION_PLAN.md`).
+
+| Banco | ISPB | Adapter mock | Integração real |
+|-------|------|:---:|:---:|
+| Nubank | 18236120 | ✅ | experimental, não validado |
+| Sicoob | 04891850 | ✅ | experimental, não validado |
+| Caixa Econômica | 00360305 | ✅ | experimental, não validado |
+| Banco do Brasil | 00000000 | ✅ | experimental, não validado |
+| Bradesco | 60746948 | ✅ | experimental, não validado |
+| Itaú Unibanco | 60701190 | ✅ | experimental, não validado |
+| Santander | 90400888 | ✅ | experimental, não validado |
+| XP | 33264668 | ✅ | experimental, não validado |
+| PicPay | 22896431 | ✅ | experimental, não validado |
+| BTG Pactual | 30306294 | ✅ | experimental, não validado |
+
+A iniciação de pagamento PIX (`initiate_pix`) e `list_pix_keys` estão hoje restritas a `environment=mock`, a jornada real da API de Pagamentos do Open Finance Brasil (consentimento de pagamento dedicado, requisições/respostas assinadas com JWS, idempotência persistente) ainda não foi implementada; veja `IMPLEMENTATION_PLAN.md`, fase P2.
 
 > Novos bancos: implemente `BankAdapter` (ou herde de `DefaultOpenFinanceAdapter`) e registre - veja "Adicionando um novo banco" abaixo.
 
@@ -47,8 +51,8 @@ Claude → "Você gastou R$ 847,30 com alimentação em março..."
 | `list_transactions` | Extrato com filtros e categorização DSPy | 2 |
 | `list_credit_cards` | Cartões de crédito e limites | 2 |
 | `get_credit_card_bills` | Faturas abertas e anteriores | 2 |
-| `list_pix_keys` | Chaves PIX cadastradas | 2 |
-| `initiate_pix` | Pagamento PIX com idempotência | 3 |
+| `list_pix_keys` | Chaves PIX cadastradas (somente mock, veja acima) | 2 |
+| `initiate_pix` | Pagamento PIX com idempotência (somente mock, veja acima) | 3 |
 | `list_investments` | Renda fixa (CDB, LCI, LCA) | 4 |
 | `start_consent` | Inicia o fluxo de consentimento/autorização FAPI-BR | - |
 | `complete_consent` | Completa o consentimento após autorização no banco | - |

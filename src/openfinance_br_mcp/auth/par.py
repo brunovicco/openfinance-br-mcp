@@ -107,6 +107,13 @@ async def push_authorization_request(
         "iss": settings.client_id,
         "aud": issuer,
         "response_type": "code id_token",
+        # FAPI-BR 2.2.x mandates response_mode=fragment alongside
+        # response_type=code id_token (RFC 6749 §4.2's hash-fragment
+        # delivery) - previously omitted here despite the module
+        # docstring claiming otherwise; see tools/consent.py for why
+        # this makes the callback a paste-back flow, not an automatic
+        # redirect this server can receive directly.
+        "response_mode": "fragment",
         "client_id": settings.client_id,
         "redirect_uri": str(settings.redirect_uri),
         "scope": scope,
@@ -114,6 +121,12 @@ async def push_authorization_request(
         "nonce": nonce,
         "code_challenge": pkce.code_challenge,
         "code_challenge_method": pkce.code_challenge_method,
+        # 'acr' as an essential ID token claim - required by the
+        # FAPI-BR confidential client profile so the authorization
+        # server asserts the authentication context class (e.g.
+        # multi-factor) actually used, rather than leaving it
+        # unconstrained.
+        "claims": {"id_token": {"acr": {"essential": True}}},
         "iat": now,
         "exp": now + _REQUEST_OBJECT_TTL_SECONDS,
     }

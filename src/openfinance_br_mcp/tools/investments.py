@@ -12,6 +12,7 @@ from openfinance_br_mcp.observability.tool_tracing import traced_tool
 from openfinance_br_mcp.schemas.investment import BankFixedIncome
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
+from openfinance_br_mcp.tools.principal_guard import require_principal_binding
 
 
 class InvestmentSummary(BaseModel):
@@ -32,6 +33,7 @@ class InvestmentListResult(BaseModel):
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def list_investments(
     subject_id: str, bank: BankId, ctx: AppRequestContext
 ) -> InvestmentListResult:

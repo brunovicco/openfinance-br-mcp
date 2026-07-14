@@ -98,8 +98,17 @@ class TestBuildRealAdapters:
         self, http_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A successful directory resolution should win over the
-        adapter's hardcoded default."""
+        adapter's hardcoded default.
+
+        Explicitly opts into directory_fallback_mode='hardcoded_fallback':
+        this fixture has no OpenIDDiscoveryDocument, so token_endpoint
+        resolution fails even though base_url resolves fine - under
+        the default 'fail_closed' (P0.6) that would exclude the bank
+        entirely, but this test's intent is specifically the *partial*
+        fallback behavior (base_url from the directory, token_endpoint
+        from the hardcoded default)."""
         monkeypatch.setattr(settings, "environment", "production")
+        monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
         respx.get(f"{settings.bcb_directory_url}participants").mock(
             return_value=httpx.Response(
                 200, json=[_nubank_organisation_with_resolved_host()]
@@ -156,12 +165,15 @@ class TestBuildRealAdapters:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_falls_back_to_hardcoded_default_when_directory_fails(
+    async def test_falls_back_to_hardcoded_default_when_fallback_enabled(
         self, http_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A directory lookup miss (e.g. unmapped/unfound ISPB) must not
-        crash server startup - it should fall back per-bank."""
+        crash server startup - with directory_fallback_mode explicitly
+        set to 'hardcoded_fallback' (local-dev opt-in - see P0.6), it
+        should fall back per-bank instead of excluding the bank."""
         monkeypatch.setattr(settings, "environment", "production")
+        monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
         respx.get(f"{settings.bcb_directory_url}participants").mock(
             return_value=httpx.Response(200, json=[])
         )
@@ -175,6 +187,32 @@ class TestBuildRealAdapters:
 
         assert adapters["nubank"].base_url == _NUBANK_BASE
         assert isinstance(adapters["caixa"], CaixaAdapter)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fail_closed_excludes_bank_when_directory_fails_by_default(
+        self, http_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test (P0.6): the default directory_fallback_mode
+        is 'fail_closed' - a directory lookup miss must exclude the
+        bank from app.adapters entirely, never silently fall back to a
+        possibly stale hardcoded URL."""
+        monkeypatch.setattr(settings, "environment", "production")
+        assert settings.directory_fallback_mode == "fail_closed"
+        respx.get(f"{settings.bcb_directory_url}participants").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+
+        from openfinance_br_mcp.auth.token import TokenStore
+
+        directory = DirectoryClient(
+            http_client, base_url=str(settings.bcb_directory_url)
+        )
+        adapters = await _build_real_adapters(TokenStore(), http_client, directory)
+
+        assert "nubank" not in adapters
+        assert "caixa" not in adapters
+        assert adapters == {}
 
 
 class TestAppLifespan:
@@ -208,6 +246,13 @@ class TestAppLifespan:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "environment", "sandbox")
+        # Explicit opt-in to the fallback: an empty sandbox Directory
+        # response means every bank fails to resolve, and the default
+        # fail_closed behavior (P0.6) would otherwise leave
+        # app.adapters empty - this test's intent is verifying
+        # "sandbox environment yields real (non-mock) adapter
+        # instances", which needs hardcoded_fallback to observe at all.
+        monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
         respx.get(f"{settings.bcb_sandbox_directory_url}participants").mock(
             return_value=httpx.Response(200, json=[])
         )
@@ -216,3 +261,19 @@ class TestAppLifespan:
             assert isinstance(app.adapters["nubank"], NubankAdapter)
             assert isinstance(app.directory, DirectoryClient)
             assert not isinstance(app.adapters["nubank"], MockOpenFinanceAdapter)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sandbox_environment_excludes_unresolved_banks_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test (P0.6): with the default fail_closed mode,
+        an empty Directory response must leave app.adapters empty
+        rather than falling back to hardcoded URLs."""
+        monkeypatch.setattr(settings, "environment", "sandbox")
+        respx.get(f"{settings.bcb_sandbox_directory_url}participants").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+
+        async with app_lifespan(server=None) as app:  # type: ignore[arg-type]
+            assert app.adapters == {}

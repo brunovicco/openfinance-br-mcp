@@ -51,7 +51,7 @@ def fresh_token() -> TokenResponse:
 async def token_store(fresh_token: TokenResponse) -> TokenStore:
     """TokenStore preloaded with a token."""
     store = TokenStore()
-    await store.save(SUBJECT_ID, fresh_token)
+    await store.save("nubank", SUBJECT_ID, fresh_token)
     return store
 
 
@@ -141,6 +141,7 @@ class TestListTransactionsCategorization:
             categorizer=mock_categorizer,
             consent_manager=AsyncMock(),
             authorization_sessions=AsyncMock(),
+            principal_bindings=AsyncMock(),
             directory=None,
         )
 
@@ -172,6 +173,7 @@ class TestListTransactionsCategorization:
             categorizer=mock_categorizer,
             consent_manager=AsyncMock(),
             authorization_sessions=AsyncMock(),
+            principal_bindings=AsyncMock(),
             directory=None,
         )
 

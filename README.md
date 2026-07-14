@@ -4,7 +4,7 @@
 
 # openfinance-br-mcp
 
-> MCP Server for **Open Finance Brasil** - connects Claude directly to the Banco Central APIs, covering Fases 2, 3, and 4.
+> Experimental MCP server for **Open Finance Brasil**, with a complete mock environment and an evolving implementation toward FAPI-BR integration. Not certified, and not yet validated against real institutions - see [VALIDATION.md](VALIDATION.md) and the implementation plan in `IMPLEMENTATION_PLAN.md` before relying on this outside `environment=mock`.
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
 [![uv](https://img.shields.io/badge/managed%20by-uv-blueviolet)](https://github.com/astral-sh/uv)
@@ -25,18 +25,22 @@ Claude → "You spent R$ 847.30 on food in March..."
 
 ## Supported banks
 
-| Bank | ISPB | Fase 2 | Fase 3 (PIX) | Fase 4 (Investments) |
-|-------|------|--------|--------------|----------------------|
-| Nubank | 18236120 | ✅ | ✅ | ✅ |
-| Sicoob | 04891850 | ✅ | ✅ | ✅ |
-| Caixa Econômica | 00360305 | ✅ | ✅ | ✅ |
-| Banco do Brasil | 00000000 | ✅ | ✅ | ✅ |
-| Bradesco | 60746948 | ✅ | ✅ | ✅ |
-| Itaú Unibanco | 60701190 | ✅ | ✅ | ✅ |
-| Santander | 90400888 | ✅ | ✅ | ✅ |
-| XP | 33264668 | ✅ | ✅ | ✅ |
-| PicPay | 22896431 | ✅ | ✅ | ✅ |
-| BTG Pactual | 30306294 | ✅ | ✅ | ✅ |
+Mock adapters are implemented for the ten institutions below - each returns realistic, in-memory sample data with zero credentials or network access, and is the primary way to explore this project today. Real (non-mock) support is experimental: it has not been exercised against any bank's actual sandbox or production environment, is not FAPI-BR certified, and several endpoints/paths are still being brought in line with the official OpenAPI specs (tracked in `IMPLEMENTATION_PLAN.md`).
+
+| Bank | ISPB | Mock adapter | Real integration |
+|-------|------|:---:|:---:|
+| Nubank | 18236120 | ✅ | experimental, unvalidated |
+| Sicoob | 04891850 | ✅ | experimental, unvalidated |
+| Caixa Econômica | 00360305 | ✅ | experimental, unvalidated |
+| Banco do Brasil | 00000000 | ✅ | experimental, unvalidated |
+| Bradesco | 60746948 | ✅ | experimental, unvalidated |
+| Itaú Unibanco | 60701190 | ✅ | experimental, unvalidated |
+| Santander | 90400888 | ✅ | experimental, unvalidated |
+| XP | 33264668 | ✅ | experimental, unvalidated |
+| PicPay | 22896431 | ✅ | experimental, unvalidated |
+| BTG Pactual | 30306294 | ✅ | experimental, unvalidated |
+
+PIX payment initiation (`initiate_pix`) and `list_pix_keys` are currently restricted to `environment=mock`, the real Open Finance Brasil Payments API journey (dedicated payment consent, signed JWS requests/responses, persistent idempotency) is not yet implemented; see `IMPLEMENTATION_PLAN.md`, phase P2.
 
 > New banks: implement `BankAdapter` (or subclass `DefaultOpenFinanceAdapter`) and register it - see "Adding a new bank" below.
 
@@ -49,8 +53,8 @@ Claude → "You spent R$ 847.30 on food in March..."
 | `list_transactions` | Statement with filters and DSPy categorization | 2 |
 | `list_credit_cards` | Credit cards and limits | 2 |
 | `get_credit_card_bills` | Open and past bills | 2 |
-| `list_pix_keys` | Registered PIX keys | 2 |
-| `initiate_pix` | Idempotent PIX payment | 3 |
+| `list_pix_keys` | Registered PIX keys (mock-only, see below) | 2 |
+| `initiate_pix` | Idempotent PIX payment (mock-only, see below) | 3 |
 | `list_investments` | Fixed income (CDB, LCI, LCA) | 4 |
 | `start_consent` | Starts the FAPI-BR consent/authorization flow | - |
 | `complete_consent` | Completes consent after the user authorizes at the bank | - |

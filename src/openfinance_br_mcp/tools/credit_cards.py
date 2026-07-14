@@ -12,6 +12,7 @@ from openfinance_br_mcp.observability.tool_tracing import traced_tool
 from openfinance_br_mcp.schemas.credit_card import Bill, CreditCardAccount
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
+from openfinance_br_mcp.tools.principal_guard import require_principal_binding
 
 
 class CreditCardListResult(BaseModel):
@@ -31,6 +32,7 @@ class BillListResult(BaseModel):
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def list_credit_cards(
     subject_id: str, bank: BankId, ctx: AppRequestContext
 ) -> CreditCardListResult:
@@ -57,6 +59,7 @@ async def list_credit_cards(
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def get_credit_card_bills(
     subject_id: str, bank: BankId, credit_card_account_id: str, ctx: AppRequestContext
 ) -> BillListResult:

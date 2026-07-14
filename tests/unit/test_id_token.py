@@ -62,6 +62,7 @@ def _valid_claims() -> dict:
         "sub": "user-123",
         "aud": "test-client-id",
         "nonce": NONCE,
+        "acr": "urn:brasil:openbanking:loa2",
         "iat": now,
         "exp": now + 300,
     }
@@ -177,6 +178,23 @@ class TestVerifyIdToken:
         )
 
         with pytest.raises(AuthenticationError, match="verification failed"):
+            verify_id_token(token, issuer=ISSUER, jwks=bank_jwks, nonce=NONCE)
+
+    def test_raises_when_acr_claim_missing(
+        self, bank_key: jwk.JWK, bank_jwks: dict, rsa_public_key_pem: str
+    ) -> None:
+        """Regression test (P0.7): 'acr' was requested as an essential
+        claim (see auth/par.py) - its absence must fail closed rather
+        than silently accept the ID token."""
+        claims = _valid_claims()
+        del claims["acr"]
+        token = _build_id_token(
+            client_public_key_pem=rsa_public_key_pem,
+            signing_key=bank_key,
+            claims=claims,
+        )
+
+        with pytest.raises(AuthenticationError, match="acr"):
             verify_id_token(token, issuer=ISSUER, jwks=bank_jwks, nonce=NONCE)
 
     def test_raises_when_kid_not_in_jwks(

@@ -6,6 +6,67 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Security and correctness fixes from an internal engineering review (see
+`IMPLEMENTATION_PLAN.md` for the full phased plan and rationale behind each
+item). Phase P0 (immediate risk blockers) and part of P1 (per-family
+Directory resolution) are included here; the Payments API v5 journey (P2)
+and sandbox validation (P3) are tracked separately.
+
+### Fixed
+
+- **Cross-bank token/consent collision**: `TokenStore` and `ConsentManager`
+  now key state by `(bank_id, subject_id)` instead of `subject_id` alone -
+  previously, authorizing a second bank for the same subject (e.g. CPF)
+  could overwrite the first bank's token, and a refresh could be attempted
+  against the wrong bank's token endpoint.
+- **Consent reuse across banks/scopes**: `ConsentManager.create()` no longer
+  reuses a cached `AWAITING_AUTHORISATION`/`AUTHORISED` consent unless its
+  stored scopes are a superset of what's newly requested, and reuse is now
+  scoped per bank.
+- **`x-fapi-interaction-id`** is now sent on every protected-resource call
+  (`adapters/base.py::build_fapi_headers`), as required by the FAPI-BR
+  security profile.
+- **`response_mode=fragment`** and an essential `acr` ID-token claim are now
+  included in the PAR/JAR request object (`auth/par.py`); the ID token is
+  mandatory in `complete_consent` (previously optional) and its `acr` claim
+  is now verified (`auth/id_token.py`).
+- **Consent permission mapping**: `accounts` no longer implicitly grants
+  `transactions`/`overdraft_limits`/`balances` permissions; each is now a
+  distinct, explicitly-requested scope. PIX/payments removed from the
+  data-sharing consent's scope map entirely - payment initiation requires
+  its own dedicated payment consent (not yet implemented, see P2).
+- **Credit card path**: corrected `/credit-cards/v2/...` to the officially
+  published `/credit-cards-accounts/v2/...`.
+- **Directory resolution failures are fail-closed by default**
+  (`directory_fallback_mode=fail_closed`): a bank whose endpoint can't be
+  resolved via the Directory of Participants is now excluded from
+  `app.adapters` rather than silently falling back to a hardcoded URL.
+  Opt-in `hardcoded_fallback` mode preserves the old behavior for local dev.
+- **Per-API-family endpoint resolution**: real adapters now resolve
+  `credit-cards-accounts`, `payments`, and `bank-fixed-incomes` endpoints
+  independently via the Directory instead of reusing the `accounts` family's
+  base URL for every resource type (`DefaultOpenFinanceAdapter.set_family_base_urls`).
+
+### Added
+
+- **MCP-principal-to-subject_id binding** (`auth/principal_binding.py`,
+  `tools/principal_guard.py`): over `streamable-http` with MCP client OAuth
+  configured, every tool taking `subject_id` now verifies the authenticated
+  caller was previously bound to that subject via a completed consent flow.
+  A no-op on `stdio` or when MCP client OAuth isn't configured.
+- **OAuth required outside loopback**: server startup now fails if
+  `mcp_transport=streamable-http` is bound to a non-loopback host without
+  MCP client OAuth configured.
+- `initiate_pix`/`list_pix_keys` are now explicitly restricted to
+  `environment=mock` until the real Payments API v5 journey is implemented.
+
+### Changed
+
+- README/README.pt-BR repositioned: the "10 banks, Fases 2/3/4" claim is
+  replaced with an explicit mock-vs-real-integration distinction per bank.
+
 ## [0.1.0] - 2026-07-13
 
 Initial public release.

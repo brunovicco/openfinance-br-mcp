@@ -210,6 +210,22 @@ class Settings(BaseSettings):
     )
     consent_expiry_hours: int = Field(default=720, ge=1, le=8760)  # 30-day default
 
+    # Directory of Participants resolution behavior
+    directory_fallback_mode: Literal["fail_closed", "hardcoded_fallback"] = Field(
+        default="fail_closed",
+        description=(
+            "What to do when the Directory of Participants can't resolve a "
+            "bank's endpoint. 'fail_closed' (default, required outside "
+            "environment='mock'): the bank is simply left out of "
+            "app.adapters - tools calling it get a clear 'bank not "
+            "available' error instead of silently talking to a possibly "
+            "stale or wrong hardcoded URL. 'hardcoded_fallback': falls "
+            "back to each adapter's hardcoded default base_url/"
+            "token_endpoint - useful for local dev against a bank whose "
+            "sandbox Directory entry is incomplete, never for production."
+        ),
+    )
+
     # Shared state backend (TokenStore/ConsentManager)
     redis_url: str | None = Field(
         default=None,
@@ -380,6 +396,42 @@ class Settings(BaseSettings):
                 "mcp_oauth_issuer_url and mcp_oauth_resource_server_url must "
                 "be set together, or both left unset to run the HTTP "
                 "transport without MCP client auth"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_oauth_required_outside_loopback(self) -> Self:
+        """Requires MCP client OAuth whenever the HTTP transport isn't loopback-bound.
+
+        Per the MCP authorization spec, serving 'streamable-http'
+        without any client authentication is only acceptable when the
+        bind host stays local (127.0.0.1/localhost/::1) - unreachable
+        from the network, so there is no remote caller to authenticate
+        in the first place. Any other bind host (e.g. '0.0.0.0' in a
+        container) must have mcp_oauth_issuer_url/
+        mcp_oauth_resource_server_url configured; otherwise every tool
+        call would be reachable over the network with no verification
+        of who is calling at all.
+
+        Returns:
+            The validated Settings instance.
+
+        Raises:
+            ValueError: If mcp_transport='streamable-http', the bind
+                host isn't loopback, and MCP client OAuth isn't
+                configured.
+        """
+        is_http = self.mcp_transport == "streamable-http"
+        is_loopback = self.mcp_http_host in ("127.0.0.1", "localhost", "::1")
+        has_oauth = self.mcp_oauth_issuer_url is not None
+        if is_http and not is_loopback and not has_oauth:
+            raise ValueError(
+                "mcp_oauth_issuer_url/mcp_oauth_resource_server_url are "
+                "required when mcp_transport='streamable-http' and "
+                f"mcp_http_host='{self.mcp_http_host}' is not a loopback "
+                "address - serving the HTTP transport on a network-"
+                "reachable host with no MCP client authentication would "
+                "let any caller invoke every tool unauthenticated."
             )
         return self
 

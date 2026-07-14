@@ -130,6 +130,7 @@ def _app(
         categorizer=AsyncMock(),
         consent_manager=ConsentManager(http_client),
         authorization_sessions=AuthorizationSessionStore(),
+        principal_bindings=AsyncMock(),
         directory=directory,
     )
 
@@ -291,12 +292,14 @@ class TestCompleteConsent:
         # Seed the consent manager's cache so get_status() finds it -
         # it was created by start_consent in the real flow.
         await app.consent_manager._set_cached(
+            "nubank",
             SUBJECT_ID,
             {
                 "data": {
                     "consentId": "urn:bank:C1",
                     "status": "AWAITING_AUTHORISATION",
-                }
+                },
+                "scopes": ["accounts"],
             },
         )
 
@@ -308,6 +311,7 @@ class TestCompleteConsent:
                 "sub": SUBJECT_ID,
                 "aud": "test-client-id",
                 "nonce": "the-nonce",
+                "acr": "urn:brasil:openbanking:loa2",
                 "iat": now,
                 "exp": now + 300,
             },
@@ -331,7 +335,7 @@ class TestCompleteConsent:
         assert result.consent_id == "urn:bank:C1"
         assert result.status == "AUTHORISED"
         saved = await app.token_store.get_valid_token(
-            SUBJECT_ID, app.http_client, TOKEN_ENDPOINT
+            "nubank", SUBJECT_ID, app.http_client, TOKEN_ENDPOINT
         )
         assert saved.access_token == "consent-bound-token"  # noqa: S105
 

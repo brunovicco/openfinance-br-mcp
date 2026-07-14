@@ -12,10 +12,19 @@ share tokens across Kubernetes replicas (see k8s/deployment.yaml) -
 its ``lock()`` is a real distributed lock, so refresh idempotency
 holds across replicas too.
 
+Every entry point takes a ``bank_id`` alongside ``subject_id``: the
+cache key is the composite ``{bank_id}:{subject_id}``, never
+``subject_id`` alone. A single ``subject_id`` (typically a CPF) can
+have an active session at several banks simultaneously - without the
+bank in the key, authorizing a second institution would silently
+overwrite the first bank's token, and a refresh could be attempted
+against the wrong bank's token endpoint entirely. See
+``docs/en/security-findings.md`` (P0.1) for the incident this closes.
+
 Example:
     >>> store = TokenStore()
-    >>> await store.save("user123", token_response)
-    >>> token = await store.get_valid_token("user123", http_client)
+    >>> await store.save("nubank", "user123", token_response)
+    >>> token = await store.get_valid_token("nubank", "user123", http_client, endpoint)
 """
 
 import json
@@ -36,6 +45,25 @@ from openfinance_br_mcp.exceptions import TokenRefreshError
 log = structlog.get_logger(__name__)
 
 _KEY_PREFIX = "openfinance:token:"
+
+
+def _composite_key(bank_id: str, subject_id: str) -> str:
+    """Builds the composite cache key identifying a subject at one bank.
+
+    Deliberately not just ``subject_id``: the same subject (e.g. a CPF)
+    can hold sessions at multiple banks at once, and each bank has its
+    own token endpoint/issuer - collapsing them onto one key would let
+    one bank's token silently overwrite another's, and would risk a
+    refresh being attempted against the wrong bank's token endpoint.
+
+    Args:
+        bank_id: Identifier of the bank (e.g. 'nubank').
+        subject_id: Identifier of the user.
+
+    Returns:
+        The composite key, e.g. 'nubank:12345678900'.
+    """
+    return f"{bank_id}:{subject_id}"
 
 
 class TokenResponse(dict[str, Any]):
@@ -146,35 +174,44 @@ class TokenStore:
         """
         self._store: KeyValueStore = store if store is not None else InMemoryStore()
 
-    def _lock_key(self, subject_id: str) -> str:
-        """Builds the lock key for a subject.
+    def _lock_key(self, bank_id: str, subject_id: str) -> str:
+        """Builds the lock key for a subject at a bank.
 
         Deliberately distinct from the data key (``_KEY_PREFIX +
-        subject_id``) - RedisStore.lock() SETs its own value directly
+        composite key``) - RedisStore.lock() SETs its own value directly
         under this key, which would otherwise clobber the stored token.
 
         Args:
+            bank_id: Identifier of the bank.
             subject_id: Unique identifier of the user/consent.
 
         Returns:
-            The lock key for this subject.
+            The lock key for this subject at this bank.
         """
-        return f"{_KEY_PREFIX}lock:{subject_id}"
+        return f"{_KEY_PREFIX}lock:{_composite_key(bank_id, subject_id)}"
 
-    async def save(self, subject_id: str, token: TokenResponse) -> None:
-        """Persists a token for a subject.
+    async def save(self, bank_id: str, subject_id: str, token: TokenResponse) -> None:
+        """Persists a token for a subject at a specific bank.
 
         Args:
+            bank_id: Identifier of the bank that issued this token.
             subject_id: Identifier of the user/consent.
             token: Response from the /token endpoint.
         """
         token["_obtained_at"] = datetime.now(UTC)
-        async with self._store.lock(self._lock_key(subject_id)):
-            await self._store.set(_KEY_PREFIX + subject_id, _serialize_token(token))
-        log.info("token_saved", subject_id=subject_id, expires_in=token.expires_in)
+        key = _composite_key(bank_id, subject_id)
+        async with self._store.lock(self._lock_key(bank_id, subject_id)):
+            await self._store.set(_KEY_PREFIX + key, _serialize_token(token))
+        log.info(
+            "token_saved",
+            bank_id=bank_id,
+            subject_id=subject_id,
+            expires_in=token.expires_in,
+        )
 
     async def get_valid_token(
         self,
+        bank_id: str,
         subject_id: str,
         http_client: httpx.AsyncClient,
         token_endpoint: str,
@@ -182,10 +219,15 @@ class TokenStore:
         """Returns a valid token, refreshing it automatically if needed.
 
         The lock guarantees that even under high concurrency only one
-        refresh is executed for a given subject - across every replica
-        when backed by RedisStore (see store_protocol.py/redis_backend.py).
+        refresh is executed for a given subject at a given bank -
+        across every replica when backed by RedisStore (see
+        store_protocol.py/redis_backend.py).
 
         Args:
+            bank_id: Identifier of the bank this token belongs to -
+                part of the cache key, so a token issued by one bank
+                can never be returned (or refreshed against the wrong
+                token endpoint) for another.
             subject_id: Identifier of the user.
             http_client: Authenticated HTTP client used for the refresh.
             token_endpoint: URL of the institution's /token endpoint.
@@ -194,22 +236,23 @@ class TokenStore:
             TokenResponse with a valid access_token.
 
         Raises:
-            KeyError: If no token exists for the subject.
+            KeyError: If no token exists for the subject at this bank.
             TokenRefreshError: If the refresh fails.
         """
-        async with self._store.lock(self._lock_key(subject_id)):
-            raw = await self._store.get(_KEY_PREFIX + subject_id)
+        key = _composite_key(bank_id, subject_id)
+        async with self._store.lock(self._lock_key(bank_id, subject_id)):
+            raw = await self._store.get(_KEY_PREFIX + key)
             if raw is None:
-                raise KeyError(subject_id)
+                raise KeyError(key)
             token = _deserialize_token(raw)
             if not token.is_expired():
                 return token
 
-            log.info("token_refresh_start", subject_id=subject_id)
+            log.info("token_refresh_start", bank_id=bank_id, subject_id=subject_id)
             refreshed = await self._refresh(token, http_client, token_endpoint)
             refreshed["_obtained_at"] = datetime.now(UTC)
-            await self._store.set(_KEY_PREFIX + subject_id, _serialize_token(refreshed))
-            log.info("token_refresh_ok", subject_id=subject_id)
+            await self._store.set(_KEY_PREFIX + key, _serialize_token(refreshed))
+            log.info("token_refresh_ok", bank_id=bank_id, subject_id=subject_id)
             return refreshed
 
     async def _refresh(
@@ -262,11 +305,12 @@ class TokenStore:
                 code="REFRESH_NETWORK_ERROR",
             ) from exc
 
-    async def revoke(self, subject_id: str) -> None:
-        """Removes the token for a subject (logout/revocation).
+    async def revoke(self, bank_id: str, subject_id: str) -> None:
+        """Removes the token for a subject at a bank (logout/revocation).
 
         Args:
+            bank_id: Identifier of the bank to revoke the session at.
             subject_id: Identifier of the user to log out.
         """
-        await self._store.delete(_KEY_PREFIX + subject_id)
-        log.info("token_revoked", subject_id=subject_id)
+        await self._store.delete(_KEY_PREFIX + _composite_key(bank_id, subject_id))
+        log.info("token_revoked", bank_id=bank_id, subject_id=subject_id)

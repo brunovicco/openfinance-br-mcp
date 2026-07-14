@@ -48,11 +48,13 @@ from openfinance_br_mcp.adapters.sicoob import SicoobAdapter
 from openfinance_br_mcp.adapters.xp import XPAdapter
 from openfinance_br_mcp.auth.authorization_session import AuthorizationSessionStore
 from openfinance_br_mcp.auth.consent import ConsentManager
+from openfinance_br_mcp.auth.principal_binding import PrincipalBindingStore
 from openfinance_br_mcp.auth.redis_backend import RedisStore
 from openfinance_br_mcp.auth.store_protocol import InMemoryStore, KeyValueStore
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.directory.client import DirectoryClient
+from openfinance_br_mcp.directory.models import ResolvedApi
 from openfinance_br_mcp.exceptions import DirectoryError
 from openfinance_br_mcp.tools.categorizer import TransactionCategorizer, get_categorizer
 
@@ -113,6 +115,9 @@ class AppContext:
         authorization_sessions: Bridges start_consent and
             complete_consent across the two separate tool calls a
             single consent flow requires (see tools/consent.py).
+        principal_bindings: Tracks which authenticated MCP client
+            principal may act on which subject_id - see
+            auth/principal_binding.py and tools/principal_guard.py.
         directory: Shared DirectoryClient for resolving real bank
             endpoints. None in mock mode, where there is nothing to
             resolve.
@@ -126,6 +131,7 @@ class AppContext:
     categorizer: TransactionCategorizer
     consent_manager: ConsentManager
     authorization_sessions: AuthorizationSessionStore
+    principal_bindings: PrincipalBindingStore
     directory: DirectoryClient | None
     pix_idempotency_cache: dict[str, str] = field(default_factory=dict)
 
@@ -179,6 +185,67 @@ async def _build_mock_adapters() -> dict[str, BankAdapter]:
     return {bank_id: MockOpenFinanceAdapter(bank_id) for bank_id in _ADAPTER_CLASSES}
 
 
+# Every Open Finance Brasil API family this project's adapters call,
+# beyond 'accounts' (already required to build the adapter itself -
+# see _build_real_adapters). Each can be published at a different base
+# URL/version/authorization server by the Directory of Participants;
+# resolving only 'accounts' and reusing that URL for all of them
+# (the previous behavior) silently assumed they matched, which isn't
+# guaranteed. See adapters/default_adapter.py::set_family_base_urls.
+_ADDITIONAL_API_FAMILIES = (
+    "credit-cards-accounts",
+    "payments",
+    "bank-fixed-incomes",
+)
+
+
+async def _resolve_family_base_urls(
+    directory: DirectoryClient, bank_id: str
+) -> dict[str, str]:
+    """Resolves every additional API family's base URL for one bank.
+
+    Best-effort per family: a family the Directory doesn't publish (or
+    fails to resolve) for this bank is simply left out of the returned
+    dict - DefaultOpenFinanceAdapter._url_for falls back to the
+    adapter's main ('accounts') base_url for any missing family, so a
+    partial result here degrades gracefully rather than failing the
+    whole adapter.
+
+    Args:
+        directory: Shared DirectoryClient.
+        bank_id: Identifier used by this project's adapters.
+
+    Returns:
+        Mapping of resolved ApiFamilyType to base URL, for whichever
+        families resolved successfully.
+    """
+    family_base_urls: dict[str, str] = {}
+    for family in _ADDITIONAL_API_FAMILIES:
+        try:
+            resolved: ResolvedApi = await directory.resolve(bank_id, family)
+        except DirectoryError as exc:
+            log.warning(
+                "family_resolution_failed",
+                bank_id=bank_id,
+                api_family_type=family,
+                error=exc.message,
+                code=exc.code,
+                detail=(
+                    "This family falls back to the adapter's main "
+                    "('accounts') base_url - see _url_for()."
+                ),
+            )
+            continue
+        family_base_urls[family] = resolved.base_url
+        log.info(
+            "family_resolution_ok",
+            bank_id=bank_id,
+            api_family_type=family,
+            base_url=resolved.base_url,
+        )
+    return family_base_urls
+
+
 async def _build_real_adapters(
     token_store: TokenStore, http_client: httpx.AsyncClient, directory: DirectoryClient
 ) -> dict[str, BankAdapter]:
@@ -193,15 +260,25 @@ async def _build_real_adapters(
             flow tools, which also resolve endpoints via this instance.
 
     Returns:
-        Dictionary of real bank adapters, keyed by bank_id. Each
-        adapter's base_url and token_endpoint come from a live
-        directory resolution when it succeeds, or from that adapter's
-        hardcoded defaults when resolution fails (logged as a warning,
-        not a startup failure) - the two are resolved independently,
-        so e.g. a working base_url with a still-unresolved
-        token_endpoint is possible and falls back only on the latter.
+        Dictionary of real bank adapters, keyed by bank_id. Whether a
+        bank whose endpoint can't be resolved is included at all
+        depends on ``settings.directory_fallback_mode``:
+          - 'fail_closed' (default, and the only mode config.py allows
+            outside environment='mock' - see
+            Settings.validate_oauth_required_outside_loopback's sibling
+            check is analogous in spirit): the bank is simply left out
+            of the returned dict. Tools calling an unresolved bank get
+            a clear "bank not available" ValidationError (see
+            tools/accounts.py) instead of silently talking to a
+            possibly stale or wrong hardcoded URL.
+          - 'hardcoded_fallback': falls back to that adapter's
+            hardcoded default base_url/token_endpoint, logged as a
+            warning - only intended for local dev against a bank whose
+            sandbox Directory entry is incomplete.
     """
     adapters: dict[str, BankAdapter] = {}
+    fallback_allowed = settings.directory_fallback_mode == "hardcoded_fallback"
+
     for bank_id, adapter_cls in _ADAPTER_CLASSES.items():
         try:
             resolved = await directory.resolve(bank_id, "accounts")
@@ -211,9 +288,19 @@ async def _build_real_adapters(
                 bank_id=bank_id,
                 error=exc.message,
                 code=exc.code,
-                detail="Falling back to this adapter's hardcoded default base_url.",
+                fallback_mode=settings.directory_fallback_mode,
+                detail=(
+                    "Falling back to this adapter's hardcoded default base_url."
+                    if fallback_allowed
+                    else "Bank excluded from app.adapters (fail_closed)."
+                ),
             )
-            adapters[bank_id] = adapter_cls(token_store, http_client)
+            if fallback_allowed:
+                adapter = adapter_cls(token_store, http_client)
+                adapter.set_family_base_urls(
+                    await _resolve_family_base_urls(directory, bank_id)
+                )
+                adapters[bank_id] = adapter
             continue
 
         log.info("directory_resolution_ok", bank_id=bank_id, base_url=resolved.base_url)
@@ -226,11 +313,21 @@ async def _build_real_adapters(
                 bank_id=bank_id,
                 error=exc.message,
                 code=exc.code,
-                detail="Falling back to this adapter's hardcoded token_endpoint.",
+                fallback_mode=settings.directory_fallback_mode,
+                detail=(
+                    "Falling back to this adapter's hardcoded token_endpoint."
+                    if fallback_allowed
+                    else "Bank excluded from app.adapters (fail_closed)."
+                ),
             )
-            adapters[bank_id] = adapter_cls(
-                token_store, http_client, base_url=resolved.base_url
-            )
+            if fallback_allowed:
+                adapter = adapter_cls(
+                    token_store, http_client, base_url=resolved.base_url
+                )
+                adapter.set_family_base_urls(
+                    await _resolve_family_base_urls(directory, bank_id)
+                )
+                adapters[bank_id] = adapter
             continue
 
         log.info(
@@ -238,12 +335,15 @@ async def _build_real_adapters(
             bank_id=bank_id,
             token_endpoint=token_endpoint,
         )
-        adapters[bank_id] = adapter_cls(
+        adapter = adapter_cls(
             token_store,
             http_client,
             base_url=resolved.base_url,
             token_endpoint=token_endpoint,
         )
+        family_base_urls = await _resolve_family_base_urls(directory, bank_id)
+        adapter.set_family_base_urls(family_base_urls)
+        adapters[bank_id] = adapter
 
     return adapters
 
@@ -278,6 +378,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     categorizer = get_categorizer()
     consent_manager = ConsentManager(http_client, store=shared_store)
     authorization_sessions = AuthorizationSessionStore(store=shared_store)
+    principal_bindings = PrincipalBindingStore(store=shared_store)
 
     log.info(
         "app_context_ready",
@@ -293,6 +394,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             categorizer=categorizer,
             consent_manager=consent_manager,
             authorization_sessions=authorization_sessions,
+            principal_bindings=principal_bindings,
             directory=directory,
         )
     finally:

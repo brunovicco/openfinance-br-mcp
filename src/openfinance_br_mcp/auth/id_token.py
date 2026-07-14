@@ -124,6 +124,7 @@ def verify_id_token(
                 "iss": issuer,
                 "nonce": nonce,
                 "exp": None,
+                "iat": None,
             },
         )
     except Exception as exc:
@@ -133,4 +134,18 @@ def verify_id_token(
         ) from exc
 
     claims: dict[str, Any] = json.loads(verified.claims)
+
+    # 'acr' was requested as an essential claim (see auth/par.py's
+    # 'claims': {'id_token': {'acr': {'essential': True}}}) - a bank
+    # honoring that request always returns it; its absence means the
+    # authorization server either ignored the essential-claims request
+    # or asserted no authentication context class at all, either of
+    # which the FAPI-BR confidential client profile treats as a
+    # verification failure, not a value to silently default.
+    if "acr" not in claims:
+        raise AuthenticationError(
+            "ID token is missing the mandatory 'acr' claim",
+            code="ID_TOKEN_MISSING_ACR",
+        )
+
     return claims

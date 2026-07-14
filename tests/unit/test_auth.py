@@ -103,14 +103,40 @@ class TestTokenStore:
     ) -> None:
         """A saved token should be retrievable without a refresh if still valid."""
         store = TokenStore()
-        await store.save("user1", valid_token)
+        await store.save("nubank", "user1", valid_token)
 
         import httpx
 
         http = httpx.AsyncClient()
-        result = await store.get_valid_token("user1", http, "https://token.example.com")
+        result = await store.get_valid_token(
+            "nubank", "user1", http, "https://token.example.com"
+        )
 
         assert result.access_token == valid_token.access_token
+
+    @pytest.mark.asyncio
+    async def test_same_subject_different_banks_do_not_collide(
+        self, valid_token: TokenResponse
+    ) -> None:
+        """Regression test (P0.1): a subject_id authorized at two banks
+        must not have one bank's token overwrite the other's."""
+        store = TokenStore()
+        other_token = TokenResponse({**valid_token, "access_token": "other-bank-token"})
+        await store.save("nubank", "user1", valid_token)
+        await store.save("itau", "user1", other_token)
+
+        import httpx
+
+        http = httpx.AsyncClient()
+        nubank_result = await store.get_valid_token(
+            "nubank", "user1", http, "https://nubank.example.com"
+        )
+        itau_result = await store.get_valid_token(
+            "itau", "user1", http, "https://itau.example.com"
+        )
+
+        assert nubank_result.access_token == valid_token.access_token
+        assert itau_result.access_token == "other-bank-token"  # noqa: S105
 
     @pytest.mark.asyncio
     async def test_concurrent_refresh_is_idempotent(
@@ -125,7 +151,7 @@ class TestTokenStore:
                 "_obtained_at": datetime.now(UTC) - timedelta(seconds=10),
             }
         )
-        await store.save("user2", expired_token)
+        await store.save("nubank", "user2", expired_token)
 
         refresh_count = 0
 
@@ -148,7 +174,8 @@ class TestTokenStore:
 
             http = httpx.AsyncClient()
             tasks = [
-                store.get_valid_token("user2", http, "https://x.com") for _ in range(5)
+                store.get_valid_token("nubank", "user2", http, "https://x.com")
+                for _ in range(5)
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -158,11 +185,13 @@ class TestTokenStore:
     async def test_revoke_removes_token(self, valid_token: TokenResponse) -> None:
         """revoke() should remove the token from the store."""
         store = TokenStore()
-        await store.save("user3", valid_token)
-        await store.revoke("user3")
+        await store.save("nubank", "user3", valid_token)
+        await store.revoke("nubank", "user3")
 
         with pytest.raises(KeyError):
-            await store.get_valid_token("user3", httpx.AsyncClient(), "https://x.com")
+            await store.get_valid_token(
+                "nubank", "user3", httpx.AsyncClient(), "https://x.com"
+            )
 
     @pytest.mark.asyncio
     @respx.mock

@@ -16,6 +16,7 @@ Example:
     ...         ...
 """
 
+import uuid
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -31,6 +32,28 @@ from openfinance_br_mcp.schemas.pix import PixKey, PixPayment, PixPaymentRequest
 from openfinance_br_mcp.schemas.transaction import TransactionFilters, TransactionList
 
 log = structlog.get_logger(__name__)
+
+
+def build_fapi_headers(access_token: str) -> dict[str, str]:
+    """Builds the header set required on every FAPI-BR protected resource call.
+
+    The FAPI-BR security profile requires 'x-fapi-interaction-id' on
+    every call to a protected resource (accounts, consents, payments,
+    etc.) - the authorization server may reject requests missing it,
+    and it's the correlation ID used to trace a single request across
+    client and bank logs. Previously only 'Authorization' was sent.
+
+    Args:
+        access_token: Bearer token for the request.
+
+    Returns:
+        Headers dict with 'Authorization' and a freshly generated
+        'x-fapi-interaction-id'.
+    """
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "x-fapi-interaction-id": str(uuid.uuid4()),
+    }
 
 
 class BankAdapter(ABC):
@@ -206,6 +229,7 @@ class BankAdapter(ABC):
             Access token as a string.
         """
         token = await self._token_store.get_valid_token(
+            self.bank_id,
             subject_id,
             self._http,
             self.token_endpoint,

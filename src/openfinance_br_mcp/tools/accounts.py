@@ -12,6 +12,7 @@ from openfinance_br_mcp.observability.tool_tracing import traced_tool
 from openfinance_br_mcp.schemas.account import Account, AccountBalance
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
+from openfinance_br_mcp.tools.principal_guard import require_principal_binding
 
 
 class AccountListResult(BaseModel):
@@ -31,6 +32,7 @@ class BalanceResult(BaseModel):
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def list_accounts(
     subject_id: str, bank: BankId, ctx: AppRequestContext
 ) -> AccountListResult:
@@ -60,6 +62,7 @@ async def list_accounts(
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def get_balance(
     subject_id: str, bank: BankId, account_id: str, ctx: AppRequestContext
 ) -> BalanceResult:

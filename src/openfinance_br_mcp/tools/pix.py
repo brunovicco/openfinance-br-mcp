@@ -8,12 +8,24 @@ Idempotency for ``initiate_pix`` is implemented at two levels:
      bank via the ``X-Idempotency-Key`` header.
   2. ``AppContext.pix_idempotency_cache`` prevents duplicate
      resubmissions within the same server process lifetime.
+
+Both tools are restricted to ``environment='mock'`` until the
+Payments API v5 journey (dedicated payment consent, signed JWS
+request/response, persistent idempotency store keyed by payload hash)
+is implemented - see the project's implementation plan, P2. Today's
+``initiate_pix`` calls ``/payments/v4/pix/payments`` using the data-
+sharing consent's access token, which does not follow the official
+payment-consent flow and would very likely be rejected (or worse,
+behave unpredictably) against a real bank. ``list_pix_keys`` also
+calls a path not published in the official Accounts API family and
+should be treated as demonstrative only.
 """
 
 from decimal import Decimal
 
 from pydantic import BaseModel
 
+from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.context import AppContext, AppRequestContext
 from openfinance_br_mcp.exceptions import ValidationError
 from openfinance_br_mcp.observability.tool_tracing import traced_tool
@@ -25,6 +37,27 @@ from openfinance_br_mcp.schemas.pix import (
 )
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
+from openfinance_br_mcp.tools.principal_guard import require_principal_binding
+
+
+def _require_mock_environment(tool_name: str) -> None:
+    """Raises ValidationError unless running in mock mode.
+
+    Args:
+        tool_name: Name of the calling tool, for the error message.
+
+    Raises:
+        ValidationError: If settings.environment != 'mock'.
+    """
+    if settings.environment != "mock":
+        raise ValidationError(
+            f"'{tool_name}' is only available in environment='mock'. The "
+            "real Open Finance Brasil Payments API journey (dedicated "
+            "payment consent, signed JWS requests, persistent "
+            "idempotency) is not yet implemented here - see the "
+            "project's implementation plan, phase P2.",
+            code="TOOL_MOCK_ONLY",
+        )
 
 
 class PixKeyListResult(BaseModel):
@@ -44,11 +77,14 @@ class PixPaymentResult(BaseModel):
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def list_pix_keys(
     subject_id: str, bank: BankId, account_id: str, ctx: AppRequestContext
 ) -> PixKeyListResult:
     """Lists the PIX keys (CPF, email, phone, EVP) registered to a
     bank account via Open Finance Brasil.
+
+    Only available in environment='mock' - see module docstring.
 
     Args:
         subject_id: User's CPF.
@@ -59,6 +95,7 @@ async def list_pix_keys(
     Returns:
         The PIX keys registered to the given account.
     """
+    _require_mock_environment("list_pix_keys")
     app: AppContext = ctx.request_context.lifespan_context
     adapter = app.adapters.get(bank)
     if adapter is None:
@@ -70,6 +107,7 @@ async def list_pix_keys(
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def initiate_pix(
     subject_id: str,
     bank: BankId,
@@ -84,6 +122,11 @@ async def initiate_pix(
     """Initiates a PIX payment via Open Finance Brasil. Requires an
     active payment consent. The idempotency_key field prevents
     duplicate charges on retries.
+
+    Only available in environment='mock' - see module docstring. The
+    real Payments API v5 journey (dedicated payment consent, signed
+    JWS requests, persistent cross-replica idempotency) is not yet
+    implemented.
 
     Args:
         subject_id: Payer's CPF.
@@ -101,6 +144,7 @@ async def initiate_pix(
     Returns:
         Status of the initiated (or previously cached) payment.
     """
+    _require_mock_environment("initiate_pix")
     app: AppContext = ctx.request_context.lifespan_context
 
     cached = app.pix_idempotency_cache.get(idempotency_key)

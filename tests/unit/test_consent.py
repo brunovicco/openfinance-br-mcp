@@ -8,6 +8,7 @@ from openfinance_br_mcp.auth.consent import ConsentManager, ConsentStatus
 from openfinance_br_mcp.exceptions import ConsentDeniedError, ConsentError
 
 BANK_BASE_URL = "https://bank.example.com/open-banking"
+BANK_ID = "nubank"
 SUBJECT_ID = "12345678900"
 ACCESS_TOKEN = "cc-token"  # noqa: S105
 
@@ -42,6 +43,7 @@ class TestCreate:
         manager = ConsentManager(http_client)
 
         consent_id = await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
@@ -63,12 +65,14 @@ class TestCreate:
         manager = ConsentManager(http_client)
 
         first = await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
             access_token=ACCESS_TOKEN,
         )
         second = await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
@@ -90,6 +94,7 @@ class TestCreate:
 
         with pytest.raises(ConsentError, match="Failed to create consent"):
             await manager.create(
+                BANK_ID,
                 SUBJECT_ID,
                 bank_base_url=BANK_BASE_URL,
                 scopes=["accounts"],
@@ -108,7 +113,10 @@ class TestGetStatus:
 
         with pytest.raises(ConsentError, match="No consent found"):
             await manager.get_status(
-                SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
+                BANK_ID,
+                SUBJECT_ID,
+                bank_base_url=BANK_BASE_URL,
+                access_token=ACCESS_TOKEN,
             )
 
     @pytest.mark.asyncio
@@ -122,6 +130,7 @@ class TestGetStatus:
         )
         manager = ConsentManager(http_client)
         await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
@@ -129,7 +138,7 @@ class TestGetStatus:
         )
 
         status = await manager.get_status(
-            SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
+            BANK_ID, SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
         )
 
         assert status == ConsentStatus.AUTHORISED
@@ -147,6 +156,7 @@ class TestGetStatus:
         )
         manager = ConsentManager(http_client)
         await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
@@ -155,7 +165,10 @@ class TestGetStatus:
 
         with pytest.raises(ConsentDeniedError, match="denied"):
             await manager.get_status(
-                SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
+                BANK_ID,
+                SUBJECT_ID,
+                bank_base_url=BANK_BASE_URL,
+                access_token=ACCESS_TOKEN,
             )
 
     @pytest.mark.asyncio
@@ -171,6 +184,7 @@ class TestGetStatus:
         )
         manager = ConsentManager(http_client)
         await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
@@ -179,7 +193,10 @@ class TestGetStatus:
 
         with pytest.raises(ConsentError, match="Error querying consent"):
             await manager.get_status(
-                SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
+                BANK_ID,
+                SUBJECT_ID,
+                bank_base_url=BANK_BASE_URL,
+                access_token=ACCESS_TOKEN,
             )
 
 
@@ -192,7 +209,7 @@ class TestRevoke:
     ) -> None:
         manager = ConsentManager(http_client)
         await manager.revoke(
-            SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
+            BANK_ID, SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
         )
         # No exception, nothing to assert beyond "didn't crash".
 
@@ -209,6 +226,7 @@ class TestRevoke:
         ).mock(return_value=httpx.Response(204))
         manager = ConsentManager(http_client)
         await manager.create(
+            BANK_ID,
             SUBJECT_ID,
             bank_base_url=BANK_BASE_URL,
             scopes=["accounts"],
@@ -216,20 +234,27 @@ class TestRevoke:
         )
 
         await manager.revoke(
-            SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
+            BANK_ID, SUBJECT_ID, bank_base_url=BANK_BASE_URL, access_token=ACCESS_TOKEN
         )
 
         assert delete_route.call_count == 1
-        assert await manager._get_cached(SUBJECT_ID) is None
+        assert await manager._get_cached(BANK_ID, SUBJECT_ID) is None
 
 
 class TestBuildPermissions:
     """Tests for ConsentManager._build_permissions()."""
 
     def test_maps_known_scopes(self) -> None:
-        permissions = ConsentManager._build_permissions(["accounts"])
+        permissions = ConsentManager._build_permissions(["accounts", "balances"])
         assert "ACCOUNTS_READ" in permissions
         assert "ACCOUNTS_BALANCES_READ" in permissions
+
+    def test_accounts_scope_alone_does_not_imply_balances(self) -> None:
+        """Regression test (P0.8): 'accounts' must grant exactly
+        ACCOUNTS_READ, not implicitly transactions/balances/overdraft
+        limits too."""
+        permissions = ConsentManager._build_permissions(["accounts"])
+        assert permissions == ["ACCOUNTS_READ"]
 
     def test_dedupes_overlapping_scopes(self) -> None:
         permissions = ConsentManager._build_permissions(["accounts", "accounts"])

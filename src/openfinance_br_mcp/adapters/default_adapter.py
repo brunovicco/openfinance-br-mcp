@@ -25,7 +25,7 @@ import httpx
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from openfinance_br_mcp.adapters.base import BankAdapter
+from openfinance_br_mcp.adapters.base import BankAdapter, build_fapi_headers
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.exceptions import BankAdapterError
 from openfinance_br_mcp.schemas.account import (
@@ -90,6 +90,50 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         super().__init__(token_store, http_client)
         self._base_url = base_url
         self._token_endpoint = token_endpoint
+        self._family_base_urls: dict[str, str] = {}
+
+    def set_family_base_urls(self, family_base_urls: dict[str, str]) -> None:
+        """Overrides per-API-family base URLs resolved via the Directory.
+
+        Each Open Finance Brasil API family (accounts,
+        credit-cards-accounts, payments, bank-fixed-incomes, funds,
+        variable-incomes...) can be published at a different base URL,
+        version, and even authorization server by the Directory of
+        Participants - resolving only 'accounts' and reusing that
+        single base_url for every other family (the previous behavior)
+        silently assumed they all matched, which is not guaranteed.
+        Set via a mutator rather than the constructor so every existing
+        concrete adapter subclass (NubankAdapter, SicoobAdapter, ...)
+        keeps working unchanged - see context.py::_build_real_adapters,
+        which calls this after construction once each family has been
+        resolved.
+
+        Args:
+            family_base_urls: Mapping of Directory ``ApiFamilyType`` to
+                its resolved base URL (e.g. {'credit-cards-accounts':
+                'https://.../open-banking'}). A family missing from
+                this dict falls back to ``self.base_url`` (see
+                ``_url_for``).
+        """
+        self._family_base_urls = family_base_urls
+
+    def _url_for(self, api_family_type: str) -> str:
+        """Returns the base URL to use for a given API family.
+
+        Args:
+            api_family_type: Directory ApiFamilyType (e.g. 'accounts',
+                'credit-cards-accounts', 'payments',
+                'bank-fixed-incomes').
+
+        Returns:
+            The family-specific base URL if one was resolved via
+            ``set_family_base_urls``, otherwise ``self.base_url``
+            (this adapter's default/'accounts' base URL - preserves
+            prior behavior when per-family resolution isn't available,
+            e.g. in mock mode or when the Directory doesn't publish
+            that family for this bank).
+        """
+        return self._family_base_urls.get(api_family_type, self._base_url)
 
     @property
     def base_url(self) -> str:
@@ -129,8 +173,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         token = await self._get_token(subject_id)
         try:
             response = await self._http.get(
-                f"{self.base_url}/accounts/v2/accounts",
-                headers={"Authorization": f"Bearer {token}"},
+                f"{self._url_for('accounts')}/accounts/v2/accounts",
+                headers=build_fapi_headers(token),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -165,8 +209,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         token = await self._get_token(subject_id)
         try:
             response = await self._http.get(
-                f"{self.base_url}/accounts/v2/accounts/{account_id}/balances",
-                headers={"Authorization": f"Bearer {token}"},
+                f"{self._url_for('accounts')}/accounts/v2/accounts/{account_id}/balances",
+                headers=build_fapi_headers(token),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -218,8 +262,9 @@ class DefaultOpenFinanceAdapter(BankAdapter):
 
         try:
             response = await self._http.get(
-                f"{self.base_url}/accounts/v2/accounts/{filters.account_id}/transactions",
-                headers={"Authorization": f"Bearer {token}"},
+                f"{self._url_for('accounts')}/accounts/v2/accounts/"
+                f"{filters.account_id}/transactions",
+                headers=build_fapi_headers(token),
                 params=params,
             )
             response.raise_for_status()
@@ -253,8 +298,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         """
         token = await self._get_token(subject_id)
         response = await self._http.get(
-            f"{self.base_url}/credit-cards/v2/accounts",
-            headers={"Authorization": f"Bearer {token}"},
+            f"{self._url_for('credit-cards-accounts')}/credit-cards-accounts/v2/accounts",
+            headers=build_fapi_headers(token),
         )
         response.raise_for_status()
         return [
@@ -275,8 +320,9 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         """
         token = await self._get_token(subject_id)
         response = await self._http.get(
-            f"{self.base_url}/credit-cards/v2/accounts/{credit_card_account_id}/bills",
-            headers={"Authorization": f"Bearer {token}"},
+            f"{self._url_for('credit-cards-accounts')}/credit-cards-accounts/v2/"
+            f"accounts/{credit_card_account_id}/bills",
+            headers=build_fapi_headers(token),
         )
         response.raise_for_status()
         return [self._parse_bill(item) for item in response.json().get("data", [])]
@@ -293,8 +339,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         """
         token = await self._get_token(subject_id)
         response = await self._http.get(
-            f"{self.base_url}/accounts/v2/accounts/{account_id}/pix-keys",
-            headers={"Authorization": f"Bearer {token}"},
+            f"{self._url_for('accounts')}/accounts/v2/accounts/{account_id}/pix-keys",
+            headers=build_fapi_headers(token),
         )
         response.raise_for_status()
         return [
@@ -343,10 +389,10 @@ class DefaultOpenFinanceAdapter(BankAdapter):
 
         try:
             response = await self._http.post(
-                f"{self.base_url}/payments/v4/pix/payments",
+                f"{self._url_for('payments')}/payments/v4/pix/payments",
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {token}",
+                    **build_fapi_headers(token),
                     "X-Idempotency-Key": request.idempotency_key,
                 },
             )
@@ -378,8 +424,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         """
         token = await self._get_token(subject_id)
         response = await self._http.get(
-            f"{self.base_url}/bank-fixed-incomes/v1/investments",
-            headers={"Authorization": f"Bearer {token}"},
+            f"{self._url_for('bank-fixed-incomes')}/bank-fixed-incomes/v1/investments",
+            headers=build_fapi_headers(token),
         )
         response.raise_for_status()
         data = response.json().get("data", [])

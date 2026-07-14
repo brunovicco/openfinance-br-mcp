@@ -20,6 +20,7 @@ from openfinance_br_mcp.schemas.transaction import (
 )
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
+from openfinance_br_mcp.tools.principal_guard import require_principal_binding
 
 
 class TransactionListResult(BaseModel):
@@ -34,6 +35,7 @@ class TransactionListResult(BaseModel):
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def list_transactions(
     subject_id: str,
     bank: BankId,

@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
+from mcp.server.auth.middleware.auth_context import get_access_token
 from pydantic import BaseModel
 
 from openfinance_br_mcp.auth.authorization_session import PendingAuthorization
@@ -48,6 +49,7 @@ from openfinance_br_mcp.auth.token_exchange import (
 )
 from openfinance_br_mcp.context import AppContext, AppRequestContext
 from openfinance_br_mcp.exceptions import (
+    AuthenticationError,
     ConsentDeniedError,
     ConsentError,
     ValidationError,
@@ -55,6 +57,7 @@ from openfinance_br_mcp.exceptions import (
 from openfinance_br_mcp.observability.tool_tracing import traced_tool
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
+from openfinance_br_mcp.tools.principal_guard import require_principal_binding
 
 _AUTHORIZATION_SESSION_MINUTES = 15
 
@@ -127,8 +130,15 @@ async def start_consent(
     Args:
         subject_id: User's CPF (digits only) or internal ID.
         bank: Identifier of the participating bank.
-        scopes: Desired data scopes, e.g. ['accounts', 'transactions',
-            'credit_cards', 'pix', 'investments'].
+        scopes: Desired data-sharing scopes, e.g. ['accounts',
+            'balances', 'transactions', 'overdraft_limits',
+            'credit_card_accounts', 'credit_card_limits',
+            'credit_card_bills', 'credit_card_transactions',
+            'bank_fixed_incomes', 'funds', 'variable_incomes',
+            'treasure_titles']. Does NOT include 'pix'/payments -
+            payment initiation uses a separate, dedicated payment
+            consent (Payments API), not this data-sharing consent; see
+            tools/pix.py.
         ctx: MCP request context, providing access to shared dependencies.
 
     Returns:
@@ -153,6 +163,7 @@ async def start_consent(
     )
 
     consent_id = await app.consent_manager.create(
+        bank,
         subject_id,
         bank_base_url=resolved.base_url,
         scopes=scopes,
@@ -251,20 +262,52 @@ async def complete_consent(
         code_verifier=session.pkce.code_verifier,
     )
 
+    # The authorization request was built with response_type="code
+    # id_token" (see auth/par.py) - the authorization server is
+    # therefore expected to always return an id_token alongside the
+    # code. Treating its absence as optional would silently accept a
+    # bank response that doesn't match what was actually requested;
+    # fail closed instead of persisting a bank token with no verified
+    # identity behind it.
     id_token_raw = _single("id_token")
-    if id_token_raw and app.directory is not None:
-        jwks = await app.directory.resolve_jwks(session.bank_id)
-        verify_id_token(
-            id_token_raw, issuer=session.issuer, jwks=jwks, nonce=session.nonce
+    if not id_token_raw:
+        raise AuthenticationError(
+            "Callback is missing the mandatory 'id_token' fragment "
+            "parameter - the authorization request was made with "
+            "response_type='code id_token', so a compliant "
+            "authorization server always includes one.",
+            code="MISSING_ID_TOKEN",
         )
+    if app.directory is None:
+        raise ValidationError(
+            "ID token verification requires a DirectoryClient, unavailable "
+            "in mock mode.",
+            code="CONSENT_NOT_APPLICABLE_IN_MOCK",
+        )
+    jwks = await app.directory.resolve_jwks(session.bank_id)
+    verify_id_token(id_token_raw, issuer=session.issuer, jwks=jwks, nonce=session.nonce)
 
-    await app.token_store.save(session.subject_id, token)
+    await app.token_store.save(session.bank_id, session.subject_id, token)
 
     status = await app.consent_manager.get_status(
+        session.bank_id,
         session.subject_id,
         bank_base_url=session.bank_base_url,
         access_token=token.access_token,
     )
+
+    # This is the one point identity is genuinely established
+    # end-to-end: the caller just completed a real login+consent at
+    # the bank for this exact subject_id. Record the binding so every
+    # other tool taking subject_id can verify the *same* authenticated
+    # MCP principal is the one acting on it (see
+    # auth/principal_binding.py, tools/principal_guard.py). A no-op
+    # when there's no MCP client OAuth configured (get_access_token()
+    # is None) - see that module's docstring for why that's safe.
+    access_token = get_access_token()
+    if access_token is not None:
+        principal = access_token.client_id or access_token.subject or ""
+        await app.principal_bindings.bind(session.subject_id, principal)
 
     return CompleteConsentResult(
         bank=cast(BankId, session.bank_id),
@@ -276,6 +319,7 @@ async def complete_consent(
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def check_consent_status(
     subject_id: str, bank: BankId, ctx: AppRequestContext
 ) -> ConsentStatusResult:
@@ -298,13 +342,17 @@ async def check_consent_status(
     token = await _require_token(app, subject_id, token_endpoint, bank)
 
     status = await app.consent_manager.get_status(
-        subject_id, bank_base_url=resolved.base_url, access_token=token.access_token
+        bank,
+        subject_id,
+        bank_base_url=resolved.base_url,
+        access_token=token.access_token,
     )
     return ConsentStatusResult(bank=bank, status=status.value)
 
 
 @traced_tool
 @translate_errors
+@require_principal_binding
 async def revoke_consent(
     subject_id: str, bank: BankId, ctx: AppRequestContext
 ) -> RevokeConsentResult:
@@ -327,9 +375,12 @@ async def revoke_consent(
     token = await _require_token(app, subject_id, token_endpoint, bank)
 
     await app.consent_manager.revoke(
-        subject_id, bank_base_url=resolved.base_url, access_token=token.access_token
+        bank,
+        subject_id,
+        bank_base_url=resolved.base_url,
+        access_token=token.access_token,
     )
-    await app.token_store.revoke(subject_id)
+    await app.token_store.revoke(bank, subject_id)
     return RevokeConsentResult(bank=bank, subject_id=subject_id, revoked=True)
 
 
@@ -352,7 +403,7 @@ async def _require_token(
     """
     try:
         return await app.token_store.get_valid_token(
-            subject_id, app.http_client, token_endpoint
+            bank, subject_id, app.http_client, token_endpoint
         )
     except KeyError as exc:
         raise ConsentError(

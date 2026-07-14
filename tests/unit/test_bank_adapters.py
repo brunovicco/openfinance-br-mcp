@@ -58,17 +58,30 @@ ADAPTER_CASES = [
 
 @pytest.fixture
 async def token_store() -> TokenStore:
+    """Preloaded with the same token under every bank_id in ADAPTER_CASES.
+
+    A single fixture instance is reused across every parametrized bank
+    in this module, and TokenStore's cache key is now composite
+    (bank_id:subject_id, see auth/token.py P0.1) - saving under every
+    known bank_id here means whichever adapter_cls a given test
+    invocation constructs finds its token regardless of which bank it
+    is.
+    """
     store = TokenStore()
-    await store.save(
-        SUBJECT_ID,
-        TokenResponse(
-            {
-                "access_token": "test-token",
-                "expires_in": 3600,
-                "_obtained_at": datetime.now(UTC),
-            }
-        ),
-    )
+    for case in ADAPTER_CASES:
+        bank_id = case.id
+        assert bank_id is not None
+        await store.save(
+            bank_id,
+            SUBJECT_ID,
+            TokenResponse(
+                {
+                    "access_token": "test-token",
+                    "expires_in": 3600,
+                    "_obtained_at": datetime.now(UTC),
+                }
+            ),
+        )
     return store
 
 
@@ -234,7 +247,7 @@ async def test_list_transactions_http_error_names_the_correct_bank(
 async def test_get_credit_card_accounts_parses_response(
     adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
 ) -> None:
-    respx.get(f"{base_url}/credit-cards/v2/accounts").mock(
+    respx.get(f"{base_url}/credit-cards-accounts/v2/accounts").mock(
         return_value=httpx.Response(
             200, json={"data": [{"creditCardAccountId": "cc-1"}]}
         )
@@ -253,7 +266,7 @@ async def test_get_credit_card_accounts_parses_response(
 async def test_get_credit_card_bills_parses_response(
     adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
 ) -> None:
-    respx.get(f"{base_url}/credit-cards/v2/accounts/cc-1/bills").mock(
+    respx.get(f"{base_url}/credit-cards-accounts/v2/accounts/cc-1/bills").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -399,6 +412,7 @@ async def test_bank_http_calls_never_use_an_mcp_client_token(
 
     store = TokenStore()
     await store.save(
+        expected_bank_id,
         SUBJECT_ID,
         TokenResponse(
             {
