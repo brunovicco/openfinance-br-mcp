@@ -131,6 +131,8 @@ def _app(
         consent_manager=ConsentManager(http_client),
         authorization_sessions=AuthorizationSessionStore(),
         principal_bindings=AsyncMock(),
+        payment_consent_manager=AsyncMock(),
+        idempotency_store=AsyncMock(),
         directory=directory,
     )
 

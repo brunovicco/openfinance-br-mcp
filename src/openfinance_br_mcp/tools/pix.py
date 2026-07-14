@@ -6,28 +6,35 @@ initiate payments with guaranteed idempotency.
 Idempotency for ``initiate_pix`` is implemented at two levels:
   1. The ``idempotency_key`` field is required and forwarded to the
      bank via the ``X-Idempotency-Key`` header.
-  2. ``AppContext.pix_idempotency_cache`` prevents duplicate
-     resubmissions within the same server process lifetime.
+  2. ``AppContext.idempotency_store`` (auth/idempotency_store.py)
+     persists a hash of the payload alongside the response, safe
+     across restarts and Kubernetes replicas (Redis-backed in
+     production) - replacing the previous in-process
+     ``pix_idempotency_cache`` dict, which never survived either.
 
-Both tools are restricted to ``environment='mock'`` until the
-Payments API v5 journey (dedicated payment consent, signed JWS
-request/response, persistent idempotency store keyed by payload hash)
-is implemented - see the project's implementation plan, P2. Today's
-``initiate_pix`` calls ``/payments/v4/pix/payments`` using the data-
-sharing consent's access token, which does not follow the official
-payment-consent flow and would very likely be rejected (or worse,
-behave unpredictably) against a real bank. ``list_pix_keys`` also
+``list_pix_keys`` remains restricted to ``environment='mock'``: it
 calls a path not published in the official Accounts API family and
 should be treated as demonstrative only.
+
+``initiate_pix`` is no longer mock-only (P2): outside mock mode it now
+requires an ``AUTHORISED`` payment consent obtained via
+``start_payment_consent``/``complete_payment_consent``
+(tools/payments.py) before it will call the bank, uses a
+``purpose='payment'`` access token (never the data-sharing token - see
+adapters/base.py), and signs the outgoing request as a JWS
+(auth/payment_jws.py) per the FAPI-BR message signing profile. In mock
+mode there is no payment consent resource to check against, so that
+step is skipped and the mock adapter is called directly, as before.
 """
 
 from decimal import Decimal
 
 from pydantic import BaseModel
 
+from openfinance_br_mcp.auth.payment_consent import PaymentConsentStatus
 from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.context import AppContext, AppRequestContext
-from openfinance_br_mcp.exceptions import ValidationError
+from openfinance_br_mcp.exceptions import ConsentError, ValidationError
 from openfinance_br_mcp.observability.tool_tracing import traced_tool
 from openfinance_br_mcp.schemas.pix import (
     PixKey,
@@ -123,10 +130,12 @@ async def initiate_pix(
     active payment consent. The idempotency_key field prevents
     duplicate charges on retries.
 
-    Only available in environment='mock' - see module docstring. The
-    real Payments API v5 journey (dedicated payment consent, signed
-    JWS requests, persistent cross-replica idempotency) is not yet
-    implemented.
+    Outside ``environment='mock'``, requires an ``AUTHORISED`` payment
+    consent for this subject/bank, obtained beforehand via
+    ``start_payment_consent`` + ``complete_payment_consent``
+    (tools/payments.py) - a data-sharing consent alone is not
+    sufficient. In mock mode this check is skipped entirely, since the
+    mock adapter has no payment-consent resource to check against.
 
     Args:
         subject_id: Payer's CPF.
@@ -138,22 +147,47 @@ async def initiate_pix(
             list_accounts.
         idempotency_key: Client-generated UUID to prevent duplicates.
         ctx: MCP request context, providing access to shared adapters
-            and the idempotency cache.
+            and the persistent idempotency store.
         description: Payment description/reason (max 140 chars).
 
     Returns:
         Status of the initiated (or previously cached) payment.
     """
-    _require_mock_environment("initiate_pix")
     app: AppContext = ctx.request_context.lifespan_context
-
-    cached = app.pix_idempotency_cache.get(idempotency_key)
-    if cached is not None:
-        return PixPaymentResult.model_validate_json(cached)
 
     adapter = app.adapters.get(bank)
     if adapter is None:
         raise ValidationError(f"Bank '{bank}' is not available.", code="UNKNOWN_BANK")
+
+    if app.directory is not None:
+        resolved = await app.directory.resolve(bank, "payments-consents")
+        token_endpoint = await app.directory.resolve_token_endpoint(bank)
+        try:
+            payment_token = await app.token_store.get_valid_token(
+                bank, subject_id, app.http_client, token_endpoint, purpose="payment"
+            )
+        except KeyError as exc:
+            raise ConsentError(
+                f"No active payment consent session found for subject "
+                f"'{subject_id}' at '{bank}' - call start_payment_consent and "
+                "complete_payment_consent first.",
+                code="NO_ACTIVE_PAYMENT_SESSION",
+            ) from exc
+
+        status = await app.payment_consent_manager.get_status(
+            bank,
+            subject_id,
+            bank_base_url=resolved.base_url,
+            access_token=payment_token.access_token,
+        )
+        if status != PaymentConsentStatus.AUTHORISED:
+            raise ConsentError(
+                f"Payment consent for subject '{subject_id}' at '{bank}' is "
+                f"'{status.value}', not AUTHORISED - complete the consent "
+                "flow (start_payment_consent/complete_payment_consent) "
+                "before calling initiate_pix.",
+                code="PAYMENT_CONSENT_NOT_AUTHORISED",
+            )
 
     request = PixPaymentRequest(
         # Converted via str() to avoid binary float precision artifacts
@@ -166,7 +200,19 @@ async def initiate_pix(
         idempotency_key=idempotency_key,
     )
 
-    payment = await adapter.initiate_pix(subject_id, request)
-    result = PixPaymentResult(bank=bank, payment=payment)
-    app.pix_idempotency_cache[idempotency_key] = result.model_dump_json()
-    return result
+    async def _do_payment() -> str:
+        payment = await adapter.initiate_pix(subject_id, request)
+        return PixPaymentResult(bank=bank, payment=payment).model_dump_json()
+
+    result_json = await app.idempotency_store.get_or_compute(
+        bank_id=bank,
+        subject_id=subject_id,
+        idempotency_key=idempotency_key,
+        payload=request.model_dump(mode="json"),
+        compute=_do_payment,
+    )
+
+    if app.directory is not None:
+        await app.payment_consent_manager.mark_consumed(bank, subject_id)
+
+    return PixPaymentResult.model_validate_json(result_json)

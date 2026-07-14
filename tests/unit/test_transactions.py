@@ -142,6 +142,8 @@ class TestListTransactionsCategorization:
             consent_manager=AsyncMock(),
             authorization_sessions=AsyncMock(),
             principal_bindings=AsyncMock(),
+            payment_consent_manager=AsyncMock(),
+            idempotency_store=AsyncMock(),
             directory=None,
         )
 
@@ -174,6 +176,8 @@ class TestListTransactionsCategorization:
             consent_manager=AsyncMock(),
             authorization_sessions=AsyncMock(),
             principal_bindings=AsyncMock(),
+            payment_consent_manager=AsyncMock(),
+            idempotency_store=AsyncMock(),
             directory=None,
         )
 

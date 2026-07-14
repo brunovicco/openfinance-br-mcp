@@ -48,6 +48,8 @@ from openfinance_br_mcp.adapters.sicoob import SicoobAdapter
 from openfinance_br_mcp.adapters.xp import XPAdapter
 from openfinance_br_mcp.auth.authorization_session import AuthorizationSessionStore
 from openfinance_br_mcp.auth.consent import ConsentManager
+from openfinance_br_mcp.auth.idempotency_store import IdempotencyStore
+from openfinance_br_mcp.auth.payment_consent import PaymentConsentManager
 from openfinance_br_mcp.auth.principal_binding import PrincipalBindingStore
 from openfinance_br_mcp.auth.redis_backend import RedisStore
 from openfinance_br_mcp.auth.store_protocol import InMemoryStore, KeyValueStore
@@ -118,11 +120,21 @@ class AppContext:
         principal_bindings: Tracks which authenticated MCP client
             principal may act on which subject_id - see
             auth/principal_binding.py and tools/principal_guard.py.
+        payment_consent_manager: Manages the Payments API's own,
+            dedicated consent lifecycle - separate from
+            consent_manager (data-sharing consents). See
+            auth/payment_consent.py and tools/payments.py.
+        idempotency_store: Persistent, cross-replica idempotency
+            record for initiate_pix, replacing the old in-process
+            pix_idempotency_cache. See auth/idempotency_store.py.
         directory: Shared DirectoryClient for resolving real bank
             endpoints. None in mock mode, where there is nothing to
             resolve.
-        pix_idempotency_cache: Cache of ``{idempotency_key: serialized_result}``
-            for ``initiate_pix``, scoped to the server process lifetime.
+        pix_idempotency_cache: Deprecated in-process idempotency cache,
+            kept only so any external code still reading this
+            attribute doesn't break outright - initiate_pix now uses
+            idempotency_store instead. Scoped to the server process
+            lifetime.
     """
 
     http_client: httpx.AsyncClient
@@ -132,6 +144,8 @@ class AppContext:
     consent_manager: ConsentManager
     authorization_sessions: AuthorizationSessionStore
     principal_bindings: PrincipalBindingStore
+    payment_consent_manager: PaymentConsentManager
+    idempotency_store: IdempotencyStore
     directory: DirectoryClient | None
     pix_idempotency_cache: dict[str, str] = field(default_factory=dict)
 
@@ -379,6 +393,8 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     consent_manager = ConsentManager(http_client, store=shared_store)
     authorization_sessions = AuthorizationSessionStore(store=shared_store)
     principal_bindings = PrincipalBindingStore(store=shared_store)
+    payment_consent_manager = PaymentConsentManager(http_client, store=shared_store)
+    idempotency_store = IdempotencyStore(store=shared_store)
 
     log.info(
         "app_context_ready",
@@ -395,6 +411,8 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             consent_manager=consent_manager,
             authorization_sessions=authorization_sessions,
             principal_bindings=principal_bindings,
+            payment_consent_manager=payment_consent_manager,
+            idempotency_store=idempotency_store,
             directory=directory,
         )
     finally:

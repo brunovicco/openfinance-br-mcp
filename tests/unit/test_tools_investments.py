@@ -27,6 +27,8 @@ def _app(adapter: MockOpenFinanceAdapter | None) -> AppContext:
         consent_manager=AsyncMock(),
         authorization_sessions=AsyncMock(),
         principal_bindings=AsyncMock(),
+        payment_consent_manager=AsyncMock(),
+        idempotency_store=AsyncMock(),
         directory=None,
     )
 

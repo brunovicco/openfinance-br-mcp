@@ -47,7 +47,7 @@ log = structlog.get_logger(__name__)
 _KEY_PREFIX = "openfinance:token:"
 
 
-def _composite_key(bank_id: str, subject_id: str) -> str:
+def _composite_key(bank_id: str, subject_id: str, purpose: str = "data") -> str:
     """Builds the composite cache key identifying a subject at one bank.
 
     Deliberately not just ``subject_id``: the same subject (e.g. a CPF)
@@ -56,14 +56,24 @@ def _composite_key(bank_id: str, subject_id: str) -> str:
     one bank's token silently overwrite another's, and would risk a
     refresh being attempted against the wrong bank's token endpoint.
 
+    ``purpose`` guards against a second collision: a subject can also
+    hold *two different* tokens at the *same* bank simultaneously - one
+    bound to the data-sharing consent (auth/consent.py), another bound
+    to a payment consent (auth/payment_consent.py). These must never
+    share a key either, or completing a payment consent flow would
+    silently clobber an active data-sharing session (or vice versa).
+
     Args:
         bank_id: Identifier of the bank (e.g. 'nubank').
         subject_id: Identifier of the user.
+        purpose: Which consent flow this token is bound to - 'data'
+            (default, preserves every existing call site's behavior)
+            or 'payment'.
 
     Returns:
-        The composite key, e.g. 'nubank:12345678900'.
+        The composite key, e.g. 'nubank:12345678900:data'.
     """
-    return f"{bank_id}:{subject_id}"
+    return f"{bank_id}:{subject_id}:{purpose}"
 
 
 class TokenResponse(dict[str, Any]):
@@ -174,7 +184,7 @@ class TokenStore:
         """
         self._store: KeyValueStore = store if store is not None else InMemoryStore()
 
-    def _lock_key(self, bank_id: str, subject_id: str) -> str:
+    def _lock_key(self, bank_id: str, subject_id: str, purpose: str = "data") -> str:
         """Builds the lock key for a subject at a bank.
 
         Deliberately distinct from the data key (``_KEY_PREFIX +
@@ -184,28 +194,41 @@ class TokenStore:
         Args:
             bank_id: Identifier of the bank.
             subject_id: Unique identifier of the user/consent.
+            purpose: See ``_composite_key``.
 
         Returns:
             The lock key for this subject at this bank.
         """
-        return f"{_KEY_PREFIX}lock:{_composite_key(bank_id, subject_id)}"
+        return f"{_KEY_PREFIX}lock:{_composite_key(bank_id, subject_id, purpose)}"
 
-    async def save(self, bank_id: str, subject_id: str, token: TokenResponse) -> None:
+    async def save(
+        self,
+        bank_id: str,
+        subject_id: str,
+        token: TokenResponse,
+        *,
+        purpose: str = "data",
+    ) -> None:
         """Persists a token for a subject at a specific bank.
 
         Args:
             bank_id: Identifier of the bank that issued this token.
             subject_id: Identifier of the user/consent.
             token: Response from the /token endpoint.
+            purpose: 'data' (default) or 'payment' - see
+                ``_composite_key``. A payment-bound token must be
+                saved with ``purpose='payment'`` so it never collides
+                with a data-sharing token for the same subject/bank.
         """
         token["_obtained_at"] = datetime.now(UTC)
-        key = _composite_key(bank_id, subject_id)
-        async with self._store.lock(self._lock_key(bank_id, subject_id)):
+        key = _composite_key(bank_id, subject_id, purpose)
+        async with self._store.lock(self._lock_key(bank_id, subject_id, purpose)):
             await self._store.set(_KEY_PREFIX + key, _serialize_token(token))
         log.info(
             "token_saved",
             bank_id=bank_id,
             subject_id=subject_id,
+            purpose=purpose,
             expires_in=token.expires_in,
         )
 
@@ -215,6 +238,8 @@ class TokenStore:
         subject_id: str,
         http_client: httpx.AsyncClient,
         token_endpoint: str,
+        *,
+        purpose: str = "data",
     ) -> TokenResponse:
         """Returns a valid token, refreshing it automatically if needed.
 
@@ -231,6 +256,8 @@ class TokenStore:
             subject_id: Identifier of the user.
             http_client: Authenticated HTTP client used for the refresh.
             token_endpoint: URL of the institution's /token endpoint.
+            purpose: 'data' (default) or 'payment' - see
+                ``_composite_key``.
 
         Returns:
             TokenResponse with a valid access_token.
@@ -239,8 +266,8 @@ class TokenStore:
             KeyError: If no token exists for the subject at this bank.
             TokenRefreshError: If the refresh fails.
         """
-        key = _composite_key(bank_id, subject_id)
-        async with self._store.lock(self._lock_key(bank_id, subject_id)):
+        key = _composite_key(bank_id, subject_id, purpose)
+        async with self._store.lock(self._lock_key(bank_id, subject_id, purpose)):
             raw = await self._store.get(_KEY_PREFIX + key)
             if raw is None:
                 raise KeyError(key)
@@ -305,12 +332,19 @@ class TokenStore:
                 code="REFRESH_NETWORK_ERROR",
             ) from exc
 
-    async def revoke(self, bank_id: str, subject_id: str) -> None:
+    async def revoke(
+        self, bank_id: str, subject_id: str, *, purpose: str = "data"
+    ) -> None:
         """Removes the token for a subject at a bank (logout/revocation).
 
         Args:
             bank_id: Identifier of the bank to revoke the session at.
             subject_id: Identifier of the user to log out.
+            purpose: 'data' (default) or 'payment' - see
+                ``_composite_key``.
         """
-        await self._store.delete(_KEY_PREFIX + _composite_key(bank_id, subject_id))
-        log.info("token_revoked", bank_id=bank_id, subject_id=subject_id)
+        key = _composite_key(bank_id, subject_id, purpose)
+        await self._store.delete(_KEY_PREFIX + key)
+        log.info(
+            "token_revoked", bank_id=bank_id, subject_id=subject_id, purpose=purpose
+        )

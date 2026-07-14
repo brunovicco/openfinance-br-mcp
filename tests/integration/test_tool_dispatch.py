@@ -107,6 +107,9 @@ async def test_list_tools_returns_all_registered_tools():
         "complete_consent",
         "check_consent_status",
         "revoke_consent",
+        "start_payment_consent",
+        "complete_payment_consent",
+        "check_payment_consent_status",
     }
     for tool in result.tools:
         assert tool.inputSchema
@@ -157,17 +160,40 @@ async def test_call_tool_with_unknown_bank_is_rejected_by_schema():
 
 
 @pytest.mark.asyncio
-async def test_initiate_pix_idempotent_replay_hits_cache():
-    """Two initiate_pix calls with the same idempotency_key must not
-    recompute the payment.
+async def test_initiate_pix_identical_replay_hits_cache():
+    """Two initiate_pix calls with the same idempotency_key AND the same
+    payload must not recompute the payment - the second call returns
+    the exact cached result (see auth/idempotency_store.py, P2.1)."""
+    assert settings.environment == "mock"
+    mcp = build_server()
+    payload = {
+        "subject_id": "12345678900",
+        "bank": "nubank",
+        "creditor_key_type": "EMAIL",
+        "debtor_account_id": "acc_1",
+        "idempotency_key": "11111111-1111-1111-1111-111111111111",
+        "amount": 10.5,
+        "creditor_key": "someone@example.com",
+    }
 
-    Runs under environment='mock' (the default): initiate_pix is
-    gated to mock-only (P0.9) until the real Payments API v5 journey -
-    dedicated payment consent, signed JWS requests, persistent
-    idempotency - is implemented (see the project's implementation
-    plan, P2). The second call deliberately uses a different amount/
-    creditor to prove the cached result wins over a fresh computation,
-    not just that the numbers happen to match."""
+    async with create_connected_server_and_client_session(
+        mcp, raise_exceptions=True
+    ) as session:
+        first = await session.call_tool("initiate_pix", payload)
+        second = await session.call_tool("initiate_pix", payload)
+
+    assert first.isError is False
+    assert second.isError is False
+    assert first.structuredContent == second.structuredContent
+
+
+@pytest.mark.asyncio
+async def test_initiate_pix_reused_key_different_payload_is_rejected():
+    """Reusing an idempotency_key across two *different* payments is a
+    client bug the Open Finance Brasil idempotency contract requires
+    rejecting outright, not silently returning the unrelated cached
+    result for (see auth/idempotency_store.py, P2.1) - contrast with
+    test_initiate_pix_identical_replay_hits_cache above."""
     assert settings.environment == "mock"
     mcp = build_server()
     base_payload = {
@@ -175,7 +201,7 @@ async def test_initiate_pix_idempotent_replay_hits_cache():
         "bank": "nubank",
         "creditor_key_type": "EMAIL",
         "debtor_account_id": "acc_1",
-        "idempotency_key": "11111111-1111-1111-1111-111111111111",
+        "idempotency_key": "33333333-3333-3333-3333-333333333333",
     }
 
     async with create_connected_server_and_client_session(
@@ -195,16 +221,23 @@ async def test_initiate_pix_idempotent_replay_hits_cache():
         )
 
     assert first.isError is False
-    assert second.isError is False
-    assert first.structuredContent == second.structuredContent
+    assert second.isError is True
 
 
 @pytest.mark.asyncio
-async def test_initiate_pix_rejected_outside_mock_environment(
+async def test_initiate_pix_rejected_outside_mock_without_payment_consent(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Regression test (P0.9): initiate_pix must refuse to run outside
-    environment='mock' until the real Payments API v5 journey exists."""
+    """Outside environment='mock', initiate_pix is no longer blanket-
+    disabled (that was P0.9's stopgap) - as of P2.4 it instead requires
+    an AUTHORISED payment consent (tools/payments.py) for this subject/
+    bank before it will call the bank at all. This fixture's Directory
+    mock returns no organisations, so the call actually fails one step
+    earlier, at endpoint resolution - but the key regression this
+    guards is that the call is *not silently allowed through* to the
+    bank the way it would have been if the mock-only gate had simply
+    been deleted without adding the payment-consent check in its
+    place."""
     monkeypatch.setattr(settings, "environment", "sandbox")
     monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
     monkeypatch.setattr(settings, "mtls_enabled", False)

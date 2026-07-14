@@ -10,9 +10,9 @@ follows [Semantic Versioning](https://semver.org/).
 
 Security and correctness fixes from an internal engineering review (see
 `IMPLEMENTATION_PLAN.md` for the full phased plan and rationale behind each
-item). Phase P0 (immediate risk blockers) and part of P1 (per-family
-Directory resolution) are included here; the Payments API v5 journey (P2)
-and sandbox validation (P3) are tracked separately.
+item). Phase P0 (immediate risk blockers), part of P1 (per-family Directory
+resolution), and P2 (the Payments API v5 journey) are included here; sandbox
+validation (P3) is tracked separately.
 
 ### Fixed
 
@@ -35,8 +35,8 @@ and sandbox validation (P3) are tracked separately.
 - **Consent permission mapping**: `accounts` no longer implicitly grants
   `transactions`/`overdraft_limits`/`balances` permissions; each is now a
   distinct, explicitly-requested scope. PIX/payments removed from the
-  data-sharing consent's scope map entirely - payment initiation requires
-  its own dedicated payment consent (not yet implemented, see P2).
+  data-sharing consent's scope map entirely - payment initiation now
+  requires its own dedicated payment consent (see the P2 items below).
 - **Credit card path**: corrected `/credit-cards/v2/...` to the officially
   published `/credit-cards-accounts/v2/...`.
 - **Directory resolution failures are fail-closed by default**
@@ -59,11 +59,43 @@ and sandbox validation (P3) are tracked separately.
 - **OAuth required outside loopback**: server startup now fails if
   `mcp_transport=streamable-http` is bound to a non-loopback host without
   MCP client OAuth configured.
-- `initiate_pix`/`list_pix_keys` are now explicitly restricted to
-  `environment=mock` until the real Payments API v5 journey is implemented.
+- `list_pix_keys` is now explicitly restricted to `environment=mock` (this
+  path isn't published in the official Accounts API family and is
+  demonstrative only). `initiate_pix` was also mock-only in this same
+  commit; see the P2 items below for how that restriction was lifted.
+- **Dedicated payment consent** (`auth/payment_consent.py`,
+  `tools/payments.py`): the Payments API has its own consent resource,
+  entirely separate from the data-sharing consent - a payment consent
+  authorizes exactly one specific payment (amount, creditor, date) and is
+  never scope-reused across payments. New tools `start_payment_consent`,
+  `complete_payment_consent`, and `check_payment_consent_status` drive this
+  flow (PAR/JAR + ID token verification, mirroring `tools/consent.py`).
+- **JWS message signing for payments** (`auth/payment_jws.py`):
+  `initiate_pix` now signs its request body as a compact JWS with the
+  client's own key before sending it, per the FAPI-BR message signing
+  profile the Payments API requires on top of the bearer token and mTLS
+  channel. Verifying the bank's signed response is implemented
+  (`verify_payment_response`) but not yet wired into the adapter - tracked
+  for P3.
+- **Persistent, cross-replica PIX idempotency** (`auth/idempotency_store.py`):
+  replaces the previous in-process `pix_idempotency_cache` dict, which
+  never survived a restart and wasn't shared across Kubernetes replicas.
+  Also fixes a correctness gap: a replay with an *identical* payload under
+  a previously-used `idempotency_key` still returns the cached response,
+  but a replay with a *different* payload under the same key now correctly
+  raises a conflict error instead of silently returning the wrong cached
+  result.
 
 ### Changed
 
+- `initiate_pix` is no longer restricted to `environment=mock`. Outside
+  mock mode it now requires an `AUTHORISED` payment consent for the
+  subject/bank (obtained via `start_payment_consent`/
+  `complete_payment_consent`) before it will call the bank, uses a
+  `purpose='payment'` access token that's kept strictly separate from the
+  data-sharing token (`auth/token.py`'s cache key gained a `purpose`
+  dimension for this), and marks the payment consent consumed after a
+  successful payment.
 - README/README.pt-BR repositioned: the "10 banks, Fases 2/3/4" claim is
   replaced with an explicit mock-vs-real-integration distinction per bank.
 

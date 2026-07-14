@@ -26,6 +26,7 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from openfinance_br_mcp.adapters.base import BankAdapter, build_fapi_headers
+from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.exceptions import BankAdapterError
 from openfinance_br_mcp.schemas.account import (
@@ -358,7 +359,29 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         """Initiates a PIX payment.
 
         Uses the ``idempotency_key`` field as the ``X-Idempotency-Key``
-        header to guarantee that retries don't result in duplicates.
+        header to guarantee that retries don't result in duplicates -
+        note that request-level idempotency is now primarily enforced
+        one layer up, in ``tools/pix.py``, via the persistent
+        ``IdempotencyStore`` (auth/idempotency_store.py); this header
+        is kept as a defense-in-depth signal to the bank's own API.
+
+        Fetches a ``purpose='payment'`` token - never the data-sharing
+        token ``get_accounts``/``list_transactions``/etc. use - since
+        the Payments API requires its own dedicated consent (see
+        auth/payment_consent.py, tools/payments.py). The request body
+        is additionally signed as a JWS (auth/payment_jws.py) per the
+        FAPI-BR message signing profile, which the Payments API
+        requires on top of the bearer token and mTLS channel given its
+        transactional nature; this project sends the compact JWS as
+        the request body itself with ``Content-Type: application/jwt``,
+        a defensible default documented in payment_jws.py's module
+        docstring - some bank registrations may instead expect the
+        JWS as a header alongside a plain JSON body, so confirm against
+        the specific institution's OpenAPI spec before relying on this
+        against a live sandbox (see IMPLEMENTATION_PLAN.md, P3).
+        Verifying the bank's signed response is deliberately deferred
+        (this adapter has no DirectoryClient reference to fetch the
+        bank's JWKS) - tracked as a P3 follow-up.
 
         Args:
             subject_id: ID of the paying user.
@@ -370,7 +393,7 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         Raises:
             BankAdapterError: On an HTTP failure.
         """
-        token = await self._get_token(subject_id)
+        token = await self._get_token(subject_id, purpose="payment")
         payload = {
             "data": {
                 "localInstrument": "DICT",
@@ -386,13 +409,15 @@ class DefaultOpenFinanceAdapter(BankAdapter):
                 "remittanceInformation": request.description,
             }
         }
+        signed_payload = sign_payment_payload(payload)
 
         try:
             response = await self._http.post(
                 f"{self._url_for('payments')}/payments/v4/pix/payments",
-                json=payload,
+                content=signed_payload,
                 headers={
                     **build_fapi_headers(token),
+                    "Content-Type": "application/jwt",
                     "X-Idempotency-Key": request.idempotency_key,
                 },
             )

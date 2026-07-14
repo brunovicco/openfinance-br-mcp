@@ -59,6 +59,11 @@ from openfinance_br_mcp.tools.credit_cards import (
     list_credit_cards,
 )
 from openfinance_br_mcp.tools.investments import list_investments
+from openfinance_br_mcp.tools.payments import (
+    check_payment_consent_status,
+    complete_payment_consent,
+    start_payment_consent,
+)
 from openfinance_br_mcp.tools.pix import initiate_pix, list_pix_keys
 from openfinance_br_mcp.tools.transactions import list_transactions
 
@@ -272,6 +277,18 @@ def build_server() -> FastMCP:
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=True, idempotentHint=True
         ),
+    )
+    mcp.add_tool(
+        start_payment_consent,
+        annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+    )
+    mcp.add_tool(
+        complete_payment_consent,
+        annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
+    )
+    mcp.add_tool(
+        check_payment_consent_status,
+        annotations=read_only,
     )
 
     mcp.custom_route("/health", methods=["GET"])(_health)

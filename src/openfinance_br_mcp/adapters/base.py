@@ -216,7 +216,7 @@ class BankAdapter(ABC):
         """
         ...
 
-    async def _get_token(self, subject_id: str) -> str:
+    async def _get_token(self, subject_id: str, *, purpose: str = "data") -> str:
         """Obtains a valid access token for the subject.
 
         Delegates to the TokenStore, which refreshes automatically
@@ -224,6 +224,15 @@ class BankAdapter(ABC):
 
         Args:
             subject_id: Identifier of the user.
+            purpose: 'data' (default) or 'payment' - see
+                ``auth/token.py``'s composite key. A payment-bound
+                token (obtained via the Payments API's own consent
+                flow, see auth/payment_consent.py and
+                tools/payments.py) is never the same token as a
+                data-sharing consent's - passing the wrong purpose
+                here would either fail to find a token at all or, far
+                worse, silently reuse a data-sharing token to
+                authorize a payment.
 
         Returns:
             Access token as a string.
@@ -233,6 +242,7 @@ class BankAdapter(ABC):
             subject_id,
             self._http,
             self.token_endpoint,
+            purpose=purpose,
         )
         return token.access_token
 

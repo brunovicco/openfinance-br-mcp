@@ -10,10 +10,10 @@ projeto segue o [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 Correções de segurança e correção funcional a partir de uma revisão técnica
 interna (veja `IMPLEMENTATION_PLAN.md` para o plano completo por fases e a
-justificativa de cada item). A fase P0 (bloqueadores de risco imediato) e
-parte da P1 (resolução por família via Diretório) estão incluídas aqui; a
-jornada da API de Pagamentos v5 (P2) e a validação em sandbox (P3) são
-tratadas separadamente.
+justificativa de cada item). A fase P0 (bloqueadores de risco imediato),
+parte da P1 (resolução por família via Diretório) e a P2 (jornada da API de
+Pagamentos v5) estão incluídas aqui; a validação em sandbox (P3) é tratada
+separadamente.
 
 ### Corrigido
 
@@ -37,8 +37,8 @@ tratadas separadamente.
   implicitamente `transactions`/`overdraft_limits`/`balances`; cada uma
   passa a ser um escopo distinto e explícito. PIX/pagamentos removido do
   mapa de escopos do consentimento de dados; a iniciação de pagamento
-  exige seu próprio consentimento de pagamento dedicado (ainda não
-  implementado, ver P2).
+  agora exige seu próprio consentimento de pagamento dedicado (ver os
+  itens da P2 abaixo).
 - **Path de cartão de crédito**: corrigido de `/credit-cards/v2/...` para o
   path oficial `/credit-cards-accounts/v2/...`.
 - **Falha de resolução do Diretório agora é fail-closed por padrão**
@@ -64,12 +64,46 @@ tratadas separadamente.
 - **OAuth obrigatório fora de loopback**: a inicialização do servidor agora
   falha se `mcp_transport=streamable-http` estiver vinculado a um host que
   não seja loopback sem OAuth de cliente MCP configurado.
-- `initiate_pix`/`list_pix_keys` agora são explicitamente restritas a
-  `environment=mock` até que a jornada real da API de Pagamentos v5 seja
-  implementada.
+- `list_pix_keys` agora é explicitamente restrita a `environment=mock`
+  (esse path não é publicado na família oficial da API de Contas e é
+  apenas demonstrativo). `initiate_pix` também era mock-only neste mesmo
+  commit; veja os itens da P2 abaixo sobre como essa restrição foi
+  removida.
+- **Consentimento de pagamento dedicado** (`auth/payment_consent.py`,
+  `tools/payments.py`): a API de Pagamentos tem seu próprio recurso de
+  consentimento, totalmente separado do consentimento de dados - um
+  consentimento de pagamento autoriza exatamente um pagamento específico
+  (valor, credor, data) e nunca é reutilizado por escopo entre pagamentos.
+  As novas tools `start_payment_consent`, `complete_payment_consent` e
+  `check_payment_consent_status` conduzem esse fluxo (PAR/JAR + verificação
+  de ID Token, espelhando `tools/consent.py`).
+- **Assinatura JWS de mensagens de pagamento** (`auth/payment_jws.py`):
+  `initiate_pix` agora assina o corpo da requisição como um JWS compacto
+  com a chave do próprio cliente antes de enviá-la, conforme o perfil de
+  assinatura de mensagens da FAPI-BR, exigido pela API de Pagamentos além
+  do bearer token e do canal mTLS. A verificação da resposta assinada pelo
+  banco está implementada (`verify_payment_response`) mas ainda não está
+  conectada ao adapter - rastreado para a P3.
+- **Idempotência persistente e entre réplicas para o PIX**
+  (`auth/idempotency_store.py`): substitui o antigo dict em processo
+  `pix_idempotency_cache`, que nunca sobrevivia a um reinício e não era
+  compartilhado entre réplicas Kubernetes. Também corrige uma lacuna de
+  corretude: uma repetição com payload *idêntico* sob um `idempotency_key`
+  já usado continua retornando a resposta em cache, mas uma repetição com
+  payload *diferente* sob a mesma chave agora corretamente gera um erro de
+  conflito, em vez de silenciosamente retornar o resultado em cache
+  errado.
 
 ### Alterado
 
+- `initiate_pix` não é mais restrita a `environment=mock`. Fora do modo
+  mock, agora exige um consentimento de pagamento `AUTHORISED` para o
+  subject/banco (obtido via `start_payment_consent`/
+  `complete_payment_consent`) antes de chamar o banco, usa um token de
+  acesso com `purpose='payment'` mantido estritamente separado do token de
+  compartilhamento de dados (a chave de cache do `auth/token.py` ganhou
+  uma dimensão `purpose` para isso), e marca o consentimento de pagamento
+  como consumido após um pagamento bem-sucedido.
 - README/README.pt-BR reposicionados: a afirmação de "10 bancos, Fases
   2/3/4" foi substituída por uma distinção explícita entre mock e
   integração real por banco.

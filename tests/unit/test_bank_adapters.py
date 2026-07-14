@@ -10,12 +10,15 @@ to hardcode "Nubank" even when raised from a different bank's adapter
 instance.
 """
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
 import pytest
 import respx
+from jwcrypto import jwk
+from jwcrypto import jwt as jwcrypto_jwt
 
 from openfinance_br_mcp.adapters.banco_do_brasil import (
     _BANCO_DO_BRASIL_BASE,
@@ -31,11 +34,23 @@ from openfinance_br_mcp.adapters.santander import _SANTANDER_BASE, SantanderAdap
 from openfinance_br_mcp.adapters.sicoob import _SICOOB_BASE, SicoobAdapter
 from openfinance_br_mcp.adapters.xp import _XP_BASE, XPAdapter
 from openfinance_br_mcp.auth.token import TokenResponse, TokenStore
+from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.exceptions import BankAdapterError
 from openfinance_br_mcp.schemas.pix import PixKeyType, PixPaymentRequest
 from openfinance_br_mcp.schemas.transaction import TransactionFilters
 
 SUBJECT_ID = "12345678900"
+
+
+@pytest.fixture(autouse=True)
+def _configure_private_key(
+    monkeypatch: pytest.MonkeyPatch, rsa_private_key_path: str
+) -> None:
+    """initiate_pix signs its payload as a JWS (auth/payment_jws.py),
+    which requires a configured signing key - every adapter test in
+    this module goes through the same fixture, whether or not the
+    individual test happens to call initiate_pix."""
+    monkeypatch.setattr(settings, "private_key_path", rsa_private_key_path)
 
 ADAPTER_CASES = [
     pytest.param(NubankAdapter, _NUBANK_BASE, "nubank", id="nubank"),
@@ -71,16 +86,29 @@ async def token_store() -> TokenStore:
     for case in ADAPTER_CASES:
         bank_id = case.id
         assert bank_id is not None
+        token = TokenResponse(
+            {
+                "access_token": "test-token",
+                "expires_in": 3600,
+                "_obtained_at": datetime.now(UTC),
+            }
+        )
+        await store.save(bank_id, SUBJECT_ID, token)
+        # initiate_pix fetches a purpose='payment' token (see
+        # adapters/base.py._get_token), never the data-sharing one
+        # above - save one here too so every parametrized bank's
+        # initiate_pix test has something to find.
         await store.save(
             bank_id,
             SUBJECT_ID,
             TokenResponse(
                 {
-                    "access_token": "test-token",
+                    "access_token": "test-payment-token",
                     "expires_in": 3600,
                     "_obtained_at": datetime.now(UTC),
                 }
             ),
+            purpose="payment",
         )
     return store
 
@@ -330,6 +358,45 @@ async def test_initiate_pix_parses_response(
     payment = await adapter.initiate_pix(SUBJECT_ID, request)
 
     assert payment.payment_id == "pay-1"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_initiate_pix_sends_signed_jws_with_payment_purpose_token(
+    token_store: TokenStore, rsa_public_key_pem: str
+) -> None:
+    """initiate_pix must (1) use the purpose='payment' token, never the
+    data-sharing one, and (2) sign the request body as a JWS
+    (auth/payment_jws.py) rather than sending plain JSON - both required
+    by the FAPI-BR Payments API profile (see P2 of the implementation
+    plan)."""
+    route = respx.post(f"{_NUBANK_BASE}/payments/v4/pix/payments").mock(
+        return_value=httpx.Response(
+            201, json={"data": {"paymentId": "pay-1", "status": "ACSC"}}
+        )
+    )
+    adapter = NubankAdapter(token_store, httpx.AsyncClient())
+    request = PixPaymentRequest(
+        amount=Decimal("50.00"),
+        creditor_key="recipient@example.com",
+        creditor_key_type=PixKeyType.EMAIL,
+        debtor_account_id="acc-1",
+        idempotency_key="idem-1",
+    )
+
+    await adapter.initiate_pix(SUBJECT_ID, request)
+
+    sent = route.calls[0].request
+    assert sent.headers["Authorization"] == "Bearer test-payment-token"
+    assert sent.headers["Content-Type"] == "application/jwt"
+    assert sent.headers["X-Idempotency-Key"] == "idem-1"
+
+    public_key = jwk.JWK.from_pem(rsa_public_key_pem.encode())
+    verified = jwcrypto_jwt.JWT(
+        key=public_key, jwt=sent.content.decode(), expected_type="JWS"
+    )
+    claims = json.loads(verified.claims)
+    assert claims["data"]["creditor"]["key"] == "recipient@example.com"
 
 
 @pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)
