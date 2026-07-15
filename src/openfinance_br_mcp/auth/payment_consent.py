@@ -3,8 +3,7 @@
 The Payments API has its own dedicated consent resource, entirely
 separate from the data-sharing consent ``auth/consent.py`` manages -
 initiating a PIX payment must never reuse a data-sharing consent's
-access token (the bug this module replaces; see
-``IMPLEMENTATION_PLAN.md`` P2 and the security review's finding #4).
+access token.
 The sequence is:
 
   1. Create a payment consent here (``PaymentConsentManager.create``),
@@ -19,20 +18,10 @@ The sequence is:
      (``PaymentConsentManager.get_status``) before creating the actual
      payment.
 
-Endpoint paths/payload shapes below follow the Payments API v4.0.0
-OpenAPI spec (github.com/OpenBanking-Brasil/openapi/swagger-apis/payments/4.0.0.yml -
-verified directly against the spec; v5.0.0 does not exist, an earlier
-implementation note in this module was wrong about that). Payment
-consent is part of the ``payments`` family itself in the Directory of
-Participants - there is no separate ``payments-consents``
-``ApiFamilyType`` (an earlier version of this code queried the
-Directory for that nonexistent family, which would fail with
-``API_FAMILY_NOT_FOUND`` against any real bank; see tools/payments.py
-and tools/pix.py, which resolve ``"payments"``). Both
-``POST /consents`` and ``GET /consents/{id}`` require/return
-``Content-Type: application/jwt`` (a signed JWS), not plain JSON - this
-has NOT been validated against a live BCB sandbox (tracked as
-``IMPLEMENTATION_PLAN.md`` P3).
+Endpoint paths and payloads follow the Payments API v4 OpenAPI spec.
+Payment consent belongs to the ``payments`` Directory family, and its
+request and response bodies use signed JWS content. Real-bank
+interoperability has not been validated (see ``VALIDATION.md``).
 
 Example:
     >>> manager = PaymentConsentManager(http_client=client)
@@ -81,10 +70,7 @@ class PaymentConsentStatus(StrEnum):
 
     Unlike the data-sharing Consents API (which has no 'CONSUMED'
     status - see auth/consent.py), the Payments API consent is single-
-    use and does define one: once the payment it authorized has been
-    created, the consent moves to CONSUMED and cannot authorize another
-    payment. Verify this against the exact spec version in use during
-    P3 sandbox validation.
+    use and moves to CONSUMED after the authorized payment is created.
     """
 
     AWAITING_AUTHORISATION = "AWAITING_AUTHORISATION"

@@ -1,5 +1,3 @@
-**English** · [Português](SOURCES.pt-BR.md)
-
 # Sources
 
 The specifications and references this implementation follows. This is

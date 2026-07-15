@@ -1,5 +1,3 @@
-**English** · [Português](CONTRIBUTING.pt-BR.md)
-
 # Contributing
 
 Thanks for considering a contribution to `openfinance-br-mcp`. This is a

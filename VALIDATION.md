@@ -1,5 +1,3 @@
-**English** · [Português](VALIDATION.pt-BR.md)
-
 # Validation
 
 How this project's correctness claims are actually backed, and - just as

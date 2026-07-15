@@ -2,7 +2,10 @@
 
 # openfinance-br-mcp
 
-> MCP experimental para o **Open Finance Brasil**, com ambiente mock completo e implementação em evolução para integração FAPI-BR. Não certificado e ainda não validado com instituições reais, veja [VALIDATION.md](VALIDATION.md) e o plano de implementação em `IMPLEMENTATION_PLAN.md` antes de usar fora de `environment=mock`.
+> MCP experimental para o **Open Finance Brasil**, com ambiente mock completo
+> e integração FAPI-BR em evolução. Não é certificado nem validado com
+> instituições reais; consulte [VALIDATION.md](VALIDATION.md) antes de usá-lo
+> fora de `environment=mock`.
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
 [![uv](https://img.shields.io/badge/managed%20by-uv-blueviolet)](https://github.com/astral-sh/uv)
@@ -23,49 +26,33 @@ Claude → "Você gastou R$ 847,30 com alimentação em março..."
 
 ## Bancos suportados
 
-Adapters mock estão implementados para as dez instituições abaixo, cada um retorna dados de exemplo realistas, em memória, sem exigir credenciais ou acesso à rede, e é hoje a principal forma de explorar este projeto. O suporte real (não-mock) é experimental: ainda não foi exercitado contra sandbox ou produção de nenhum banco, não possui certificação FAPI-BR, e diversos endpoints/paths ainda estão sendo alinhados às especificações OpenAPI oficiais (acompanhe em `IMPLEMENTATION_PLAN.md`).
+O ambiente mock simula Nubank, Sicoob, Caixa, Banco do Brasil, Bradesco,
+Itaú, Santander, XP, PicPay e BTG Pactual com dados em memória e sem acesso à
+rede. São simulações, não integrações certificadas.
 
-| Banco | ISPB | Adapter mock | Integração real |
-|-------|------|:---:|:---:|
-| Nubank | 18236120 | ✅ | experimental, não validado |
-| Sicoob | 04891850 | ✅ | experimental, não validado |
-| Caixa Econômica | 00360305 | ✅ | experimental, não validado |
-| Banco do Brasil | 00000000 | ✅ | experimental, não validado |
-| Bradesco | 60746948 | ✅ | experimental, não validado |
-| Itaú Unibanco | 60701190 | ✅ | experimental, não validado |
-| Santander | 90400888 | ✅ | experimental, não validado |
-| XP | 33264668 | ✅ | experimental, não validado |
-| PicPay | 22896431 | ✅ | experimental, não validado |
-| BTG Pactual | 30306294 | ✅ | experimental, não validado |
-
-A jornada da API de Pagamentos está implementada em modo experimental: consentimento dedicado, PAR/JAR, JWS e idempotência persistente. Fora de `environment=mock`, `initiate_pix` exige que `start_payment_consent` e `complete_payment_consent` produzam um consentimento `AUTHORISED`. Essa integração ainda não foi validada contra uma instituição real. `list_pix_keys` não faz parte da API padronizada do Open Finance Brasil e deve ser tratada como extensão demonstrativa do adapter.
-
-> Novos bancos: implemente `BankAdapter` (ou herde de `DefaultOpenFinanceAdapter`) e registre - veja "Adicionando um novo banco" abaixo.
+Os adapters reais e a jornada da API de Pagamentos são experimentais e não
+validados. Pagamentos usam consentimento dedicado, PAR/JAR, JWS e idempotência
+persistente. `list_pix_keys` é uma extensão demonstrativa, não um endpoint
+padronizado pelo Open Finance Brasil. Consulte [VALIDATION.md](VALIDATION.md)
+para o escopo exato.
 
 ## Tools MCP disponíveis
 
-| Tool | Descrição | Fase |
-|------|-----------|------|
-| `list_accounts` | Lista contas corrente, poupança e pré-paga | 2 |
-| `get_balance` | Saldo disponível, bloqueado e investido | 2 |
-| `list_transactions` | Extrato com filtros e categorização DSPy | 2 |
-| `list_credit_cards` | Cartões de crédito e limites | 2 |
-| `get_credit_card_bills` | Faturas abertas e anteriores | 2 |
-| `list_pix_keys` | Extensão demonstrativa para chaves PIX | 2 |
-| `initiate_pix` | Pagamento PIX idempotente; consentimento dedicado fora do mock | 3 |
-| `list_investments` | Renda fixa (CDB, LCI, LCA) | 4 |
-| `list_funds` | Fundos de investimento | 4 |
-| `list_variable_incomes` | Investimentos de renda variável | 4 |
-| `list_treasure_titles` | Títulos do Tesouro | 4 |
-| `start_consent` | Inicia o fluxo de consentimento/autorização FAPI-BR | - |
-| `complete_consent` | Completa o consentimento após autorização no banco | - |
-| `check_consent_status` | Consulta o status de um consentimento existente | - |
-| `revoke_consent` | Revoga um consentimento existente | - |
-| `start_payment_consent` | Inicia consentimento para um pagamento PIX específico | - |
-| `complete_payment_consent` | Completa a autorização do pagamento | - |
-| `check_payment_consent_status` | Consulta o consentimento de pagamento | - |
+O servidor expõe 18 tools agrupadas por jornada:
 
-Além das 18 tools, o servidor publica o resource `openfinance://banks/`, o prompt `analyze_monthly_spending` e oferece URL elicitation opcional nas duas tools que iniciam autorização bancária.
+- **Contas:** `list_accounts`, `get_balance`, `list_transactions`
+- **Cartões:** `list_credit_cards`, `get_credit_card_bills`
+- **Investimentos:** `list_investments`, `list_funds`,
+  `list_variable_incomes`, `list_treasure_titles`
+- **PIX:** `list_pix_keys`, `initiate_pix`
+- **Consentimento de dados:** `start_consent`, `complete_consent`,
+  `check_consent_status`, `revoke_consent`
+- **Consentimento de pagamento:** `start_payment_consent`,
+  `complete_payment_consent`, `check_payment_consent_status`
+
+Também publica o resource `openfinance://banks/`, o prompt
+`analyze_monthly_spending` e oferece URL elicitation opcional no início dos
+fluxos de autorização.
 
 ## Instalação rápida
 
@@ -121,41 +108,18 @@ uv run black src/ tests/
 uv run mypy src/
 ```
 
-## Docker
+## Containers e Kubernetes
 
 ```bash
-# Build
-docker build -t openfinance-br-mcp .
-
-# Roda (testes)
-docker compose --profile test up
-
-# Roda o servidor
 docker compose up openfinance-mcp
+docker compose --profile test up
 ```
 
-## Kubernetes
-
-```bash
-# Cria o namespace
-kubectl create namespace fintech
-
-# Aplica configurações (edite os secrets antes!)
-kubectl apply -f k8s/config-and-secrets.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-kubectl apply -f k8s/ingress.yaml
-```
-
-Antes de aplicar, substitua os placeholders de credenciais, chave privada,
-`MCP_OAUTH_ISSUER_URL`, `MCP_OAUTH_RESOURCE_SERVER_URL` e domínio. O servidor
-falha de forma segura se o transporte HTTP estiver exposto fora de loopback
-sem OAuth de cliente MCP.
-
-Roda `streamable-http` atrás de 2 réplicas, com CLIENT_ID/CLIENT_SECRET/
-ANTHROPIC_API_KEY montados como arquivos de secret em vez de env vars,
-e um backend Redis compartilhado (`REDIS_URL`) para que o estado de
-token/consentimento fique visível entre réplicas.
+O diretório `k8s/` contém um exemplo Streamable HTTP com duas réplicas e estado
+compartilhado no Redis. Substitua todos os placeholders de credenciais, chave
+de assinatura, emissor OAuth, resource server e domínio antes de aplicá-lo. O
+servidor falha de forma segura quando o HTTP é exposto fora de loopback sem
+OAuth de cliente MCP.
 
 ## Arquitetura
 
@@ -180,14 +144,6 @@ Open Finance BR (BCB) - Diretório de Participantes
   Nubank · Sicoob · Caixa · + 100 instituições participantes
 ```
 
-## Princípios de design
-
-- **SOLID**: BankAdapter ABC (O/C, LSP), tools com SRP, DI via construtor
-- **12-Factor**: config via env, stateless, logs em stdout
-- **Segurança**: mTLS, SecretStr, tokens em memória, PKCE obrigatório
-- **Idempotência**: asyncio.Lock no refresh de tokens, X-Idempotency-Key no PIX
-- **DSPy**: categorização de transações como problema de classificação LLM
-
 ## Variáveis de ambiente
 
 | Variável | Obrigatório | Descrição |
@@ -207,21 +163,14 @@ Open Finance BR (BCB) - Diretório de Participantes
 
 Veja `.env.example` para a lista completa.
 
-## Adicionando um novo banco
-
-1. Crie `src/openfinance_br_mcp/adapters/meu_banco.py`
-2. Herde de `DefaultOpenFinanceAdapter` (ou `BankAdapter` diretamente para uma implementação totalmente customizada)
-3. Sobrescreva `bank_id`, e passe os defaults de `base_url`/`token_endpoint`
-4. Adicione o ISPB em `_ISPB_BY_BANK` de `directory/client.py` e registre a classe do adapter em `context.py`
-
 ## Documentação
 
 - [docs/pt/authorization.md](docs/pt/authorization.md) - os dois universos de token (autenticação do cliente MCP vs. autenticação bancária FAPI-BR), e por que eles nunca podem se cruzar
-- [CONTRIBUTING.pt-BR.md](CONTRIBUTING.pt-BR.md) - configuração do ambiente de dev, checagens de CI, como adicionar um adapter de banco
-- [SECURITY.pt-BR.md](SECURITY.pt-BR.md) - escopo, aviso, e como reportar uma vulnerabilidade
-- [SOURCES.pt-BR.md](SOURCES.pt-BR.md) - especificações e RFCs que esta implementação segue
-- [VALIDATION.pt-BR.md](VALIDATION.pt-BR.md) - o que de fato foi validado, e o que não foi (nenhuma execução contra o sandbox real do BCB)
-- [CHANGELOG.pt-BR.md](CHANGELOG.pt-BR.md) - histórico de releases
+- [CONTRIBUTING.md](CONTRIBUTING.md) - ambiente de desenvolvimento, CI e novos adapters (em inglês)
+- [SECURITY.md](SECURITY.md) - escopo, aviso e reporte de vulnerabilidades (em inglês)
+- [SOURCES.md](SOURCES.md) - especificações e RFCs adotadas (em inglês)
+- [VALIDATION.md](VALIDATION.md) - o que foi validado e quais são as limitações (em inglês)
+- [CHANGELOG.md](CHANGELOG.md) - histórico de releases (em inglês)
 
 ## Licença
 

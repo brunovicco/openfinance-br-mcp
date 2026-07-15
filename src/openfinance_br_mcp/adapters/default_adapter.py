@@ -1,51 +1,10 @@
-"""Default Open Finance Brasil (BCB schema) adapter.
+"""Default adapter for the Open Finance Brasil schemas.
 
-Implements the request/parsing logic shared by every certified Open
-Finance Brasil participant that follows the official BCB schema
-literally (github.com/OpenBanking-Brasil/openapi). Concrete per-bank
-adapters (NubankAdapter, SicoobAdapter, CaixaAdapter) subclass this
-and only need to supply ``bank_id`` and their own ``base_url``/
-``token_endpoint`` defaults. ``bank_id`` stays abstract here
-(inherited from ``BankAdapter``): every concrete institution must
-still name itself explicitly, including in error messages and parsing
-defaults - never hardcode a specific bank's name in this shared class.
-
-Since P1.1, every request that has a generated, typed client under
-``clients/`` (accounts, credit-cards-accounts, bank-fixed-incomes)
-goes through it instead of building URLs/params by hand and calling
-``self._http`` directly - see ``_accounts_client``/
-``_credit_cards_client``/``_bank_fixed_incomes_client``, which inject
-this adapter's shared mTLS-configured ``self._http`` into a freshly
-constructed generated ``AuthenticatedClient`` via
-``set_async_httpx_client`` (see ``clients/<family>/client.py``). The
-Payments API's write endpoints (``POST /consents``, ``POST
-/pix/payments``) remain hand-written in ``initiate_pix`` below and in
-``auth/payment_consent.py``: ``openapi-python-client`` cannot generate
-typed methods for ``application/jwt`` (JWS) request bodies, a known,
-permanent limitation (see ``clients/__init__.py``). ``list_pix_keys``
-also remains hand-written: it is a proprietary, non-standard
-extension with no equivalent in the official Accounts family spec at
-all (see its own docstring below).
-
-Rewiring onto the generated, spec-verified clients surfaced several
-real parsing bugs beyond the credit-card-limits one already tracked in
-IMPLEMENTATION_PLAN.md P1.1 - every BCB monetary field is actually a
-nested ``{"amount": ..., "currency": ...}`` sub-object, not a flat
-string as this file previously assumed (``get_balance``,
-``get_credit_card_bills``, ``list_transactions``'s transaction amount,
-``list_investments``'s gross/net amount all read a flat key that a
-real bank's response never has - either silently defaulting to "0" or,
-for the bill amounts, crashing Pydantic validation with a dict where a
-Decimal was expected). ``_extract_amount``/``_extract_optional_amount``
-below centralize unwrapping that sub-object. Separately,
-``completed_authorised_payment_type`` on a transaction used
-``schemas.transaction.PaymentType``, which held 'DEBITO'/'CREDITO' - a
-copy-paste duplicate of ``CreditDebitType``'s values for a field that
-per the real spec's ``EnumCompletedAuthorisedPaymentIndicator``
-actually takes 'TRANSACAO_EFETIVADA'/'LANCAMENTO_FUTURO'/
-'TRANSACAO_PROCESSANDO'; constructing the old enum with a real value
-would raise ``ValueError`` on every transaction. Fixed at the schema
-level (see ``schemas/transaction.py``).
+Concrete bank adapters provide their identifier and endpoint defaults while
+this class shares request and response mapping. Read APIs use the generated
+clients under ``clients/`` with the adapter's mTLS-configured HTTP client.
+Payment writes remain explicit because their bodies use ``application/jwt``;
+``list_pix_keys`` is an adapter-specific demonstration extension.
 
 Example:
     >>> class MyBankAdapter(DefaultOpenFinanceAdapter):
@@ -233,11 +192,8 @@ from openfinance_br_mcp.schemas.transaction import (
 
 log = structlog.get_logger(__name__)
 
-# The stable version path segment this project targets for each API
-# family (see IMPLEMENTATION_PLAN.md P1.1's note on verified versions),
-# used to build the fully-versioned base URL a generated client needs
-# from the Directory's '/open-banking'-only ResolvedApi.base_url - see
-# _client_base_url.
+# Stable version path used to build each generated client's base URL from the
+# family URL returned by the Directory of Participants.
 _FAMILY_VERSIONS: dict[str, str] = {
     "accounts": "v2",
     "credit-cards-accounts": "v2",
@@ -937,14 +893,13 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         documented in payment_jws.py's module docstring; some bank
         registrations may instead expect the JWS as a header alongside
         a plain JSON body, so confirm against the specific
-        institution's OpenAPI spec before relying on this against a
-        live sandbox (see IMPLEMENTATION_PLAN.md, P3). The response
+        institution's OpenAPI spec before relying on a live environment. The response
         body is also a JWS (per the official spec, not plain JSON - a
         real ``response.json()`` call here would fail against a live
         bank), decoded via ``decode_payment_response_unverified``;
         verifying its signature against the bank's JWKS is
-        deliberately deferred (this adapter has no DirectoryClient
-        reference to fetch it) - tracked as a P3 follow-up.
+        deliberately deferred because this adapter has no DirectoryClient
+        reference from which to fetch it.
 
         Args:
             subject_id: ID of the paying user.

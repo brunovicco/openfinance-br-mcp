@@ -1,5 +1,3 @@
-**English** · [Português](SECURITY.pt-BR.md)
-
 # Security Policy
 
 ## Scope and disclaimer

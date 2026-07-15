@@ -1,236 +1,65 @@
-**English** · [Português](CHANGELOG.pt-BR.md)
-
 # Changelog
 
-All notable changes to this project are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-follows [Semantic Versioning](https://semver.org/).
+Notable project changes are documented here following
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+[Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Security and correctness fixes from an internal engineering review (see
-`IMPLEMENTATION_PLAN.md` for the full phased plan and rationale behind each
-item). Phase P0 (immediate risk blockers), part of P1 (per-family Directory
-resolution), and P2 (the Payments API v5 journey) are included here; sandbox
-validation (P3) is tracked separately.
-
-The latest MCP capability, contract, and deployment review is also included
-in this section.
-
-### Fixed
-
-- **Payment-consent onboarding**: `start_payment_consent` no longer requires
-  an existing principal-to-subject binding, allowing a payment-only client to
-  start its first consent without a circular authorization dependency.
-- **Consent scope contract**: `start_consent.scopes` now exposes a non-empty
-  enum in its MCP input schema, and unsupported scopes are rejected during
-  protocol validation instead of being silently ignored.
-- **MCP tool metadata**: `start_consent.idempotentHint` is now `false`, matching
-  the fact that each call creates a new PAR request and authorization session.
-- **Blank client credentials**: empty `CLIENT_ID` and `CLIENT_SECRET` values
-  are normalized to missing values. This supports credential-free mock startup
-  while preserving strict validation in sandbox and production environments.
-- **Cross-bank token/consent collision**: `TokenStore` and `ConsentManager`
-  now key state by `(bank_id, subject_id)` instead of `subject_id` alone -
-  previously, authorizing a second bank for the same subject (e.g. CPF)
-  could overwrite the first bank's token, and a refresh could be attempted
-  against the wrong bank's token endpoint.
-- **Consent reuse across banks/scopes**: `ConsentManager.create()` no longer
-  reuses a cached `AWAITING_AUTHORISATION`/`AUTHORISED` consent unless its
-  stored scopes are a superset of what's newly requested, and reuse is now
-  scoped per bank.
-- **`x-fapi-interaction-id`** is now sent on every protected-resource call
-  (`adapters/base.py::build_fapi_headers`), as required by the FAPI-BR
-  security profile.
-- **`response_mode=fragment`** and an essential `acr` ID-token claim are now
-  included in the PAR/JAR request object (`auth/par.py`); the ID token is
-  mandatory in `complete_consent` (previously optional) and its `acr` claim
-  is now verified (`auth/id_token.py`).
-- **Consent permission mapping**: `accounts` no longer implicitly grants
-  `transactions`/`overdraft_limits`/`balances` permissions; each is now a
-  distinct, explicitly-requested scope. PIX/payments removed from the
-  data-sharing consent's scope map entirely - payment initiation now
-  requires its own dedicated payment consent (see the P2 items below).
-- **Credit card path**: corrected `/credit-cards/v2/...` to the officially
-  published `/credit-cards-accounts/v2/...`.
-- **Directory resolution failures are fail-closed by default**
-  (`directory_fallback_mode=fail_closed`): a bank whose endpoint can't be
-  resolved via the Directory of Participants is now excluded from
-  `app.adapters` rather than silently falling back to a hardcoded URL.
-  Opt-in `hardcoded_fallback` mode preserves the old behavior for local dev.
-- **Per-API-family endpoint resolution**: real adapters now resolve
-  `credit-cards-accounts`, `payments`, and `bank-fixed-incomes` endpoints
-  independently via the Directory instead of reusing the `accounts` family's
-  base URL for every resource type (`DefaultOpenFinanceAdapter.set_family_base_urls`).
+Real-bank interoperability remains experimental and unvalidated. See
+[VALIDATION.md](VALIDATION.md) for the current validation boundary.
 
 ### Added
 
-- **MCP resource and prompt primitives**: the server now exposes the static
-  `openfinance://banks/` resource and the `analyze_monthly_spending` prompt,
-  demonstrating MCP capabilities beyond tools.
-- **URL elicitation for authorization flows**: `start_consent` and
-  `start_payment_consent` can optionally ask a compatible host to open the
-  authorization URL while retaining the URL response as a portable fallback.
-- **Server instructions**: MCP clients now receive concise guidance about
-  payment-consent safety, PIX idempotency, and the bank-catalog resource.
-- **MCP-principal-to-subject_id binding** (`auth/principal_binding.py`,
-  `tools/principal_guard.py`): over `streamable-http` with MCP client OAuth
-  configured, every tool taking `subject_id` now verifies the authenticated
-  caller was previously bound to that subject via a completed consent flow.
-  A no-op on `stdio` or when MCP client OAuth isn't configured.
-- **OAuth required outside loopback**: server startup now fails if
-  `mcp_transport=streamable-http` is bound to a non-loopback host without
-  MCP client OAuth configured.
-- `list_pix_keys` is now explicitly restricted to `environment=mock` (this
-  path isn't published in the official Accounts API family and is
-  demonstrative only). `initiate_pix` was also mock-only in this same
-  commit; see the P2 items below for how that restriction was lifted.
-- **Dedicated payment consent** (`auth/payment_consent.py`,
-  `tools/payments.py`): the Payments API has its own consent resource,
-  entirely separate from the data-sharing consent - a payment consent
-  authorizes exactly one specific payment (amount, creditor, date) and is
-  never scope-reused across payments. New tools `start_payment_consent`,
-  `complete_payment_consent`, and `check_payment_consent_status` drive this
-  flow (PAR/JAR + ID token verification, mirroring `tools/consent.py`).
-- **JWS message signing for payments** (`auth/payment_jws.py`):
-  `initiate_pix` now signs its request body as a compact JWS with the
-  client's own key before sending it, per the FAPI-BR message signing
-  profile the Payments API requires on top of the bearer token and mTLS
-  channel. Verifying the bank's signed response is implemented
-  (`verify_payment_response`) but not yet wired into the adapter - tracked
-  for P3.
-- **`decode_payment_response_unverified`** (`auth/payment_jws.py`): every Payments API
-  response body that carries payment/consent data is itself a JWS
-  (`Content-Type: application/jwt`), not plain JSON - verified directly
-  against the official spec. Decodes the claims without verifying the
-  signature (no `DirectoryClient` reference is available at these call
-  sites to fetch the bank's JWKS yet; full verification remains a P3
-  follow-up, same as already noted for `initiate_pix`'s response).
-
-- **Persistent, cross-replica PIX idempotency** (`auth/idempotency_store.py`):
-  replaces the previous in-process `pix_idempotency_cache` dict, which
-  never survived a restart and wasn't shared across Kubernetes replicas.
-  Also fixes a correctness gap: a replay with an *identical* payload under
-  a previously-used `idempotency_key` still returns the cached response,
-  but a replay with a *different* payload under the same key now correctly
-  raises a conflict error instead of silently returning the wrong cached
-  result.
-
-### Fixed (payment consent correctness, found while generating P1.1's typed clients)
-
-- **Wrong Directory API family for payment consent**: `tools/payments.py`
-  and `tools/pix.py` resolved a `"payments-consents"` family via
-  `DirectoryClient.resolve()` - this family doesn't exist in the real
-  Directory of Participants registry. Payment consent (`POST /consents`)
-  is part of the `payments` family itself; the old code would fail with
-  `API_FAMILY_NOT_FOUND` against any real bank. Now resolves `"payments"`.
-- **Wrong payment consent endpoint path/version**: `auth/payment_consent.py`
-  called `POST/GET {base}/payments/v1/consents` - the officially
-  published path is `/payments/v4/consents` (`payments/v5` doesn't exist).
-- **Payment consent request/response were treated as plain JSON**: per
-  the official spec, `POST /consents` and `GET /consents/{id}` require
-  the request body to be signed and returned as a JWS
-  (`Content-Type: application/jwt`) in both directions - the old code
-  sent a plain JSON body and called `response.json()` directly, which
-  would fail immediately against any real bank. Both directions are now
-  signed/decoded via `auth/payment_jws.py`.
-
-### Added (P1.1/P1.2/P1.3 - generated clients wired in, new investment families)
-
-- **`default_adapter.py` now calls the generated, typed clients** vendored
-  under `clients/` (see the "vendor OpenAPI-generated typed clients" entry
-  above) for every read/query endpoint, instead of building URLs by hand and
-  parsing `response.json()` loosely with `.get(key, default)` fallbacks. The
-  generated models are strict about required fields, which surfaced several
-  real parsing bugs invisible to the old lenient parsing: every BCB monetary
-  value is a nested `{"amount": ..., "currency": ...}` object, never a flat
-  string (`get_balance`, `get_credit_card_bills`, transaction/investment
-  amounts); `list_transactions` read `transactionDate`/`bookingDate` and a
-  flat `amount` key that don't exist on the real schema (now
-  `transactionDateTime`/`transactionAmount`); credit card
-  `availableCreditLimit`/`totalCreditLimit` are on a dedicated `/limits`
-  endpoint, not inlined on the accounts list.
-- **`PaymentType`** (`schemas/transaction.py`) previously duplicated
-  `CreditDebitType`'s values (`DEBITO`/`CREDITO`) - a copy-paste bug. The
-  real spec's `completedAuthorisedPaymentType` values are
-  `TRANSACAO_EFETIVADA`/`LANCAMENTO_FUTURO`/`TRANSACAO_PROCESSANDO`; every
-  real transaction would have raised `ValueError` before this fix.
-- **`BankEndpoints`** (`adapters/base.py`): typed catalog of per-family base
-  URLs replacing the old `dict[str, str]` mechanism, now resolving 4 more
-  Directory API families than before (`consents`, `funds`,
-  `variable-incomes`, `treasure-titles` - previously only
-  `credit-cards-accounts`/`payments`/`bank-fixed-incomes`).
-- **`list_funds`, `list_variable_incomes`, `list_treasure_titles`**: three
-  new tools (`tools/investments.py`) and adapter methods covering the
-  remaining investment API families declared in the consent scope map but
-  previously unimplemented (`funds` 1.1.0, `variable-incomes` 1.3.0,
-  `treasure-titles` 1.1.0). Each follows the same two-call pattern as
-  `list_investments`: a product-list endpoint identifies each position,
-  gross/net amount and product detail (quota price, ticker/ISIN, maturity
-  date) come from separate `/balances` and product-identification
-  endpoints, fetched concurrently per position. New schemas `Fund`,
-  `VariableIncome`, `TreasureTitle` (`schemas/investment.py`). Note:
-  `list_variable_incomes` returns a gross amount only, not net - the real
-  spec's balance data for this family doesn't publish a running net
-  position (taxes/fees are reported per-transaction via broker notes).
+- Dedicated payment-consent tools with PAR/JAR, PKCE, ID-token validation,
+  signed JWS payloads, and persistent PIX idempotency.
+- Generated OpenAPI clients for read APIs and new tools for funds, variable
+  income, and Treasury securities, bringing the server to 18 tools.
+- MCP resource `openfinance://banks/`, prompt `analyze_monthly_spending`, and
+  optional URL elicitation for authorization flows.
+- MCP-principal-to-subject binding for authenticated Streamable HTTP clients.
+- Redis-backed state for tokens, consent, authorization sessions, and
+  idempotency across replicas.
 
 ### Changed
 
-- Docker Compose now starts in mock mode without placeholder credentials.
-  Kubernetes examples now include the OAuth and signing-key configuration
-  required for non-loopback Streamable HTTP, a readable private-key mount,
-  and a writable DSPy cache compatible with the read-only root filesystem.
-- README and validation documents now describe all 18 tools, the MCP resource
-  and prompt, optional URL elicitation, and the experimental status of real
-  payment integrations.
-- `initiate_pix` is no longer restricted to `environment=mock`. Outside
-  mock mode it now requires an `AUTHORISED` payment consent for the
-  subject/bank (obtained via `start_payment_consent`/
-  `complete_payment_consent`) before it will call the bank, uses a
-  `purpose='payment'` access token that's kept strictly separate from the
-  data-sharing token (`auth/token.py`'s cache key gained a `purpose`
-  dimension for this), and marks the payment consent consumed after a
-  successful payment.
-- README/README.pt-BR repositioned: the "10 banks, Fases 2/3/4" claim is
-  replaced with an explicit mock-vs-real-integration distinction per bank.
+- Read operations now use generated typed clients and API-family-specific
+  endpoints resolved through the Directory of Participants.
+- `initiate_pix` can run outside mock mode after a dedicated authorized payment
+  consent and uses a payment-specific access token.
+- Docker Compose defaults to credential-free mock mode. Kubernetes examples
+  include the OAuth, signing-key, Redis, and writable-cache configuration
+  required by the sample deployment.
+- README and validation documentation now distinguish simulated institutions
+  from experimental real adapters and summarize the available MCP primitives.
+
+### Fixed
+
+- Isolated tokens and consent by bank, subject, purpose, and requested scopes
+  to prevent cross-bank or cross-journey reuse.
+- Added required FAPI interaction headers and strengthened PAR/JAR, PKCE,
+  audience, ACR, and ID-token validation.
+- Corrected payment consent to use the `payments` Directory family, Payments
+  API v4 paths, and `application/jwt` request and response bodies.
+- Corrected credit-card paths, monetary-value parsing, transaction fields, and
+  payment-type enum values using the official schemas.
+- Made Directory resolution fail closed by default and resolved endpoints per
+  API family instead of reusing the Accounts base URL.
+- Corrected MCP contracts for consent scope validation, idempotency metadata,
+  and payment-only consent onboarding.
+- Required MCP OAuth when Streamable HTTP is exposed outside loopback.
 
 ## [0.1.0] - 2026-07-13
 
-Initial public release.
-
 ### Added
 
-- MCP server (`stdio` and `streamable-http` transports) exposing 12 tools
-  covering Open Finance Brasil Fases 2, 3, and 4: `list_accounts`,
-  `get_balance`, `list_transactions`, `list_credit_cards`,
-  `get_credit_card_bills`, `list_pix_keys`, `initiate_pix`,
-  `list_investments`, `start_consent`, `complete_consent`,
-  `check_consent_status`, `revoke_consent`.
-- FAPI-BR 2.2.0 authorization flow: PAR/JAR, `private_key_jwt` client
-  authentication (RFC 7523), PKCE, ID token decryption/verification,
-  authorization_code and client_credentials token exchange.
-- `BankAdapter` abstraction with a `DefaultOpenFinanceAdapter` base and
-  concrete adapters for 10 institutions (Nubank, Sicoob, Caixa Econômica,
-  Banco do Brasil, Bradesco, Itaú Unibanco, Santander, XP, PicPay, BTG
-  Pactual), resolved via a `DirectoryClient` against the BCB Directory of
-  Participants.
-- `MockOpenFinanceAdapter`-backed `mock` environment (default) for a
-  credential-free, network-free development loop, since the official BCB
-  sandbox is not self-service.
-- DSPy + Claude-based transaction categorization (`categorize=true` on
-  `list_transactions`).
-- MCP client OAuth 2.1 resource-server authentication
-  (`JWTTokenVerifier`), audience-bound per RFC 8707, with RFC 9728
-  Protected Resource Metadata.
-- Optional RFC 8705 mutual-TLS certificate-bound access tokens for MCP
-  clients (`MTLSClientCertMiddleware`), for deployments behind a
-  proxy/gateway that terminates mTLS.
-- Redis-backed `TokenStore`/`ConsentManager` option for horizontal scaling
-  across replicas; in-memory by default.
-- OpenTelemetry tracing (generic OTLP and Langfuse exporters), structured
-  JSON/console logging via structlog.
-- Docker, Docker Compose, and Kubernetes manifests for deployment.
-- CI pipeline: `black`, `ruff`, `mypy --strict` (on `src/`), and `pytest`
-  with an 80% coverage gate.
+- MCP server with `stdio` and Streamable HTTP transports and 12 initial tools
+  for accounts, cards, PIX, investments, and consent.
+- FAPI-BR authorization foundations: PAR/JAR, PKCE, `private_key_jwt`, ID-token
+  validation, mTLS, and OAuth token exchange.
+- Extensible bank-adapter architecture, Directory client, and mock environment
+  for ten simulated institutions.
+- Optional DSPy transaction categorization, OpenTelemetry tracing, structured
+  logging, Docker, Kubernetes, Redis, and CI configuration.
 
 [0.1.0]: https://github.com/brunovicco/openfinance-br-mcp/releases/tag/v0.1.0
