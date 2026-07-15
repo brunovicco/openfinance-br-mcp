@@ -45,6 +45,7 @@ from openfinance_br_mcp.auth.mcp_token_verifier import JWTTokenVerifier
 from openfinance_br_mcp.auth.mtls_binding import MTLSClientCertMiddleware
 from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.context import app_lifespan
+from openfinance_br_mcp.mcp_primitives import register_mcp_primitives
 from openfinance_br_mcp.observability.logging_correlation import add_trace_context
 from openfinance_br_mcp.observability.tracing import configure_tracing
 from openfinance_br_mcp.tools.accounts import get_balance, list_accounts
@@ -219,6 +220,12 @@ def build_server() -> FastMCP:
     auth_settings, token_verifier = _build_mcp_auth()
     mcp = FastMCP(
         name=settings.server_name,
+        instructions=(
+            "Use read-only tools to inspect Open Finance data. Before initiating "
+            "a real PIX payment, obtain and complete a dedicated payment consent, "
+            "then preserve the same idempotency key for retries. Use the "
+            "openfinance://banks/ resource to discover configured institutions."
+        ),
         lifespan=app_lifespan,
         host=settings.mcp_http_host,
         port=settings.mcp_http_port,
@@ -279,7 +286,7 @@ def build_server() -> FastMCP:
     )
     mcp.add_tool(
         start_consent,
-        annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=True),
+        annotations=ToolAnnotations(readOnlyHint=False, idempotentHint=False),
     )
     mcp.add_tool(
         complete_consent,
@@ -307,6 +314,8 @@ def build_server() -> FastMCP:
         check_payment_consent_status,
         annotations=read_only,
     )
+
+    register_mcp_primitives(mcp)
 
     mcp.custom_route("/health", methods=["GET"])(_health)
 

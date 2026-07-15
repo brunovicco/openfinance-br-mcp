@@ -21,10 +21,10 @@ Sequence a caller drives through these tools:
      status. Once AUTHORISED, ``initiate_pix`` (tools/pix.py) creates
      the actual payment and marks the consent CONSUMED.
 
-Restricted to environment='mock' at the tool layer (see
-``_require_mock_environment`` in tools/pix.py) until this journey has
-been validated against a real BCB sandbox - see
-IMPLEMENTATION_PLAN.md, P2/P3.
+The real journey is available in sandbox/production mode but has not
+yet been validated against a participating institution. Mock mode
+keeps a direct, in-memory payment path and therefore does not require
+a bank payment-consent resource.
 """
 
 from datetime import UTC, datetime
@@ -105,7 +105,6 @@ def _require_directory(app: AppContext) -> None:
 
 @traced_tool
 @translate_errors
-@require_principal_binding
 async def start_payment_consent(
     subject_id: str,
     bank: BankId,
@@ -115,6 +114,7 @@ async def start_payment_consent(
     debtor_account_id: str,
     ctx: AppRequestContext,
     description: str = "",
+    request_url_elicitation: bool = False,
 ) -> StartPaymentConsentResult:
     """Starts the Open Finance Brasil Payments API consent flow for one
     specific PIX payment.
@@ -135,6 +135,9 @@ async def start_payment_consent(
         debtor_account_id: ID of the account to debit.
         ctx: MCP request context, providing access to shared dependencies.
         description: Payment description/reason (max 140 chars).
+        request_url_elicitation: Ask a compatible MCP client to open the
+            bank authorization URL using URL-mode elicitation. The URL is
+            still returned for clients that use the manual flow.
 
     Returns:
         The payment consent ID and the URL the user must open to
@@ -197,6 +200,16 @@ async def start_payment_consent(
             created_at=datetime.now(UTC),
         ),
     )
+
+    if request_url_elicitation:
+        await ctx.elicit_url(
+            message=(
+                f"Open {bank}'s authorization page to approve this PIX payment. "
+                "Authentication and confirmation happen directly at the bank."
+            ),
+            url=par_result.authorization_url,
+            elicitation_id=par_result.state,
+        )
 
     return StartPaymentConsentResult(
         bank=bank,

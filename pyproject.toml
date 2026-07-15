@@ -49,7 +49,7 @@ dev = [
 openfinance-mcp = "openfinance_br_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openfinance_br_mcp"]
+packages = ["src/openfinance_br_mcp", "clients"]
 
 [tool.black]
 line-length = 88

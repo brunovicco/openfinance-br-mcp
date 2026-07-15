@@ -19,6 +19,7 @@ from openfinance_br_mcp.server import (
     _configure_logging,
     _health,
     _run_streamable_http,
+    build_server,
     main,
 )
 
@@ -119,6 +120,14 @@ class TestHealth:
         assert body["status"] == "ok"
         assert body["service"] == settings.server_name
         assert body["version"] == settings.server_version
+
+
+def test_server_instructions_explain_safe_payment_sequence() -> None:
+    mcp = build_server()
+
+    assert mcp.instructions is not None
+    assert "payment consent" in mcp.instructions
+    assert "idempotency key" in mcp.instructions
 
 
 class TestMain:

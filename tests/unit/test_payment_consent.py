@@ -9,12 +9,15 @@ from openfinance_br_mcp.auth.payment_consent import (
     PaymentConsentStatus,
     PaymentDetails,
 )
+from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
+from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.exceptions import ConsentDeniedError, ConsentError
 
 BANK_ID = "nubank"
 SUBJECT_ID = "12345678900"
 BANK_BASE_URL = "https://bank.example.com/open-banking"
 ACCESS_TOKEN = "cc-token"  # noqa: S105
+CONSENTS_URL = f"{BANK_BASE_URL}/payments/v4/consents"
 
 
 def _payment() -> PaymentDetails:
@@ -26,9 +29,20 @@ def _payment() -> PaymentDetails:
     )
 
 
+def _signed_response(data: dict) -> httpx.Response:
+    return httpx.Response(200, content=sign_payment_payload(data))
+
+
 @pytest.fixture
 def http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient()
+
+
+@pytest.fixture(autouse=True)
+def _configured_client(
+    monkeypatch: pytest.MonkeyPatch, rsa_private_key_path: str
+) -> None:
+    monkeypatch.setattr(settings, "private_key_path", rsa_private_key_path)
 
 
 class TestCreate:
@@ -39,15 +53,17 @@ class TestCreate:
     async def test_creates_consent_and_returns_consent_id(
         self, http_client: httpx.AsyncClient
     ) -> None:
-        respx.post(f"{BANK_BASE_URL}/payments/v1/consents").mock(
+        respx.post(CONSENTS_URL).mock(
             return_value=httpx.Response(
                 201,
-                json={
-                    "data": {
-                        "consentId": "urn:bank:PC1",
-                        "status": "AWAITING_AUTHORISATION",
+                content=sign_payment_payload(
+                    {
+                        "data": {
+                            "consentId": "urn:bank:PC1",
+                            "status": "AWAITING_AUTHORISATION",
+                        }
                     }
-                },
+                ),
             )
         )
         manager = PaymentConsentManager(http_client)
@@ -67,9 +83,7 @@ class TestCreate:
     async def test_http_error_raises_consent_error(
         self, http_client: httpx.AsyncClient
     ) -> None:
-        respx.post(f"{BANK_BASE_URL}/payments/v1/consents").mock(
-            return_value=httpx.Response(400)
-        )
+        respx.post(CONSENTS_URL).mock(return_value=httpx.Response(400))
         manager = PaymentConsentManager(http_client)
 
         with pytest.raises(ConsentError, match="Failed to create payment consent"):
@@ -90,13 +104,19 @@ class TestCreate:
         consent authorizes exactly one payment - a second call must
         always create (and cache) a brand new consent, never reuse the
         first one, even for the same subject/bank."""
-        route = respx.post(f"{BANK_BASE_URL}/payments/v1/consents")
+        route = respx.post(CONSENTS_URL)
         route.side_effect = [
             httpx.Response(
-                201, json={"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                201,
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                ),
             ),
             httpx.Response(
-                201, json={"data": {"consentId": "urn:bank:PC2", "status": "x"}}
+                201,
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC2", "status": "x"}}
+                ),
             ),
         ]
         manager = PaymentConsentManager(http_client)
@@ -143,9 +163,12 @@ class TestGetStatus:
     async def test_returns_authorised_status(
         self, http_client: httpx.AsyncClient
     ) -> None:
-        respx.post(f"{BANK_BASE_URL}/payments/v1/consents").mock(
+        respx.post(CONSENTS_URL).mock(
             return_value=httpx.Response(
-                201, json={"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                201,
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                ),
             )
         )
         manager = PaymentConsentManager(http_client)
@@ -156,10 +179,9 @@ class TestGetStatus:
             payment=_payment(),
             access_token=ACCESS_TOKEN,
         )
-        respx.get(f"{BANK_BASE_URL}/payments/v1/consents/urn:bank:PC1").mock(
-            return_value=httpx.Response(
-                200,
-                json={"data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}},
+        respx.get(f"{CONSENTS_URL}/urn:bank:PC1").mock(
+            return_value=_signed_response(
+                {"data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}}
             )
         )
 
@@ -174,9 +196,12 @@ class TestGetStatus:
     async def test_rejected_status_raises_consent_denied_error(
         self, http_client: httpx.AsyncClient
     ) -> None:
-        respx.post(f"{BANK_BASE_URL}/payments/v1/consents").mock(
+        respx.post(CONSENTS_URL).mock(
             return_value=httpx.Response(
-                201, json={"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                201,
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                ),
             )
         )
         manager = PaymentConsentManager(http_client)
@@ -187,10 +212,9 @@ class TestGetStatus:
             payment=_payment(),
             access_token=ACCESS_TOKEN,
         )
-        respx.get(f"{BANK_BASE_URL}/payments/v1/consents/urn:bank:PC1").mock(
-            return_value=httpx.Response(
-                200,
-                json={"data": {"consentId": "urn:bank:PC1", "status": "REJECTED"}},
+        respx.get(f"{CONSENTS_URL}/urn:bank:PC1").mock(
+            return_value=_signed_response(
+                {"data": {"consentId": "urn:bank:PC1", "status": "REJECTED"}}
             )
         )
 
@@ -211,9 +235,12 @@ class TestMarkConsumed:
     async def test_marks_a_cached_consent_as_consumed(
         self, http_client: httpx.AsyncClient
     ) -> None:
-        respx.post(f"{BANK_BASE_URL}/payments/v1/consents").mock(
+        respx.post(CONSENTS_URL).mock(
             return_value=httpx.Response(
-                201, json={"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                201,
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                ),
             )
         )
         manager = PaymentConsentManager(http_client)

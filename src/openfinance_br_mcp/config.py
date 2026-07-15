@@ -352,6 +352,38 @@ class Settings(BaseSettings):
             raise ValueError("log_format must be 'json' or 'console'")
         return lower
 
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def empty_redis_url_is_unset(cls, v: object) -> object:
+        """Treats an empty REDIS_URL env var the same as an unset one.
+
+        Docker Compose commonly renders optional variables as empty
+        strings (for example ``REDIS_URL: ${REDIS_URL:-}``). For this
+        project, an absent Redis URL means "use the in-memory store",
+        and an empty string should mean the same thing.
+
+        Args:
+            v: Raw value provided by pydantic-settings.
+
+        Returns:
+            None for empty strings, otherwise the original value.
+        """
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+    @field_validator("client_id", "client_secret", mode="before")
+    @classmethod
+    def empty_bank_credentials_are_unset(cls, v: object) -> object:
+        """Treat empty optional bank credentials as missing values.
+
+        This keeps Docker Compose convenient in mock mode while preserving
+        fail-fast credential validation in sandbox and production modes.
+        """
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
     @model_validator(mode="after")
     def validate_credentials_required_outside_mock(self) -> Self:
         """Requires client_id/client_secret unless running in mock mode.

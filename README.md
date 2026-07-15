@@ -40,7 +40,7 @@ Mock adapters are implemented for the ten institutions below - each returns real
 | PicPay | 22896431 | ✅ | experimental, unvalidated |
 | BTG Pactual | 30306294 | ✅ | experimental, unvalidated |
 
-PIX payment initiation (`initiate_pix`) and `list_pix_keys` are currently restricted to `environment=mock`, the real Open Finance Brasil Payments API journey (dedicated payment consent, signed JWS requests/responses, persistent idempotency) is not yet implemented; see `IMPLEMENTATION_PLAN.md`, phase P2.
+The Payments API journey is implemented experimentally: dedicated consent, PAR/JAR, JWS, and persistent idempotency. Outside `environment=mock`, `initiate_pix` requires `start_payment_consent` and `complete_payment_consent` to produce an `AUTHORISED` consent. This integration has not yet been validated against a live institution. `list_pix_keys` is not part of the standardized Open Finance Brasil API and should be treated as an adapter-specific demonstration extension.
 
 > New banks: implement `BankAdapter` (or subclass `DefaultOpenFinanceAdapter`) and register it - see "Adding a new bank" below.
 
@@ -53,13 +53,21 @@ PIX payment initiation (`initiate_pix`) and `list_pix_keys` are currently restri
 | `list_transactions` | Statement with filters and DSPy categorization | 2 |
 | `list_credit_cards` | Credit cards and limits | 2 |
 | `get_credit_card_bills` | Open and past bills | 2 |
-| `list_pix_keys` | Registered PIX keys (mock-only, see below) | 2 |
-| `initiate_pix` | Idempotent PIX payment (mock-only, see below) | 3 |
+| `list_pix_keys` | Demonstration extension for registered PIX keys | 2 |
+| `initiate_pix` | Idempotent PIX payment; dedicated consent outside mock | 3 |
 | `list_investments` | Fixed income (CDB, LCI, LCA) | 4 |
+| `list_funds` | Investment funds | 4 |
+| `list_variable_incomes` | Variable-income investments | 4 |
+| `list_treasure_titles` | Treasury securities | 4 |
 | `start_consent` | Starts the FAPI-BR consent/authorization flow | - |
 | `complete_consent` | Completes consent after the user authorizes at the bank | - |
 | `check_consent_status` | Checks the status of an existing consent | - |
 | `revoke_consent` | Revokes an existing consent | - |
+| `start_payment_consent` | Starts consent for a specific PIX payment | - |
+| `complete_payment_consent` | Completes payment authorization | - |
+| `check_payment_consent_status` | Checks payment-consent status | - |
+
+Alongside the 18 tools, the server exposes the `openfinance://banks/` resource, the `analyze_monthly_spending` prompt, and optional URL elicitation in both bank-authorization start tools.
 
 ## Quick start
 
@@ -73,9 +81,8 @@ PIX payment initiation (`initiate_pix`) and `list_pix_keys` are currently restri
 git clone https://github.com/brunovicco/openfinance-br-mcp.git
 cd openfinance-br-mcp
 
-# Configure the environment
+# Optional: needed only for sandbox/production or DSPy categorization
 cp .env.example .env
-# Edit .env with your CLIENT_ID, CLIENT_SECRET, etc.
 
 # Install dependencies
 uv sync
@@ -93,12 +100,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "openfinance-br": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/openfinance-br-mcp", "openfinance-mcp"],
-      "env": {
-        "CLIENT_ID": "your_client_id",
-        "CLIENT_SECRET": "your_client_secret",
-        "MTLS_ENABLED": "false"
-      }
+      "args": ["run", "--directory", "/path/to/openfinance-br-mcp", "openfinance-mcp"]
     }
   }
 }
@@ -147,6 +149,11 @@ kubectl apply -f k8s/service.yaml
 kubectl apply -f k8s/ingress.yaml
 ```
 
+Before applying, replace the credential, private-key,
+`MCP_OAUTH_ISSUER_URL`, `MCP_OAUTH_RESOURCE_SERVER_URL`, and domain
+placeholders. The server fails closed when HTTP is exposed outside loopback
+without MCP client OAuth.
+
 Runs `streamable-http` behind 2 replicas, with CLIENT_ID/CLIENT_SECRET/
 ANTHROPIC_API_KEY mounted as secret files rather than env vars, and a
 shared Redis backend (`REDIS_URL`) so token/consent state is visible
@@ -160,7 +167,9 @@ Claude (MCP Client)
         ▼
 openfinance-br-mcp (MCP Server)
   ├── Auth + Consent  (FAPI-BR 2.2.0: private_key_jwt, PAR/JAR, PKCE, mTLS)
-  ├── MCP Tools       (12 tools, input validated with Pydantic v2)
+  ├── MCP Primitives  (18 tools + 1 resource + 1 prompt)
+  │   ├── Pydantic v2 input/output schemas
+  │   └── Optional URL elicitation for bank authorization
   │   └── Categorizer (DSPy + Claude for transaction classification)
   ├── Bank Adapters   (10 banks - extensible)
   └── Directory Client (resolves real bank endpoints from the BCB

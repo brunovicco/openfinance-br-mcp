@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # Stage 1: builder - installs dependencies with uv
 FROM python:3.12-slim AS builder
 
@@ -9,6 +7,8 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
+COPY clients/ ./clients/
+COPY tests/ ./tests/
 
 RUN uv sync --no-dev --frozen
 
@@ -25,14 +25,16 @@ WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+COPY --from=builder /app/clients /app/clients
 
 ENV PATH="/app/.venv/bin:$PATH" \
+    HOME=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     LOG_FORMAT=json \
     LOG_LEVEL=INFO
 
-RUN mkdir -p /app/certs && chown -R appuser:appuser /app
+RUN mkdir -p /app/certs /app/.dspy_cache && chown -R appuser:appuser /app
 
 USER appuser
 

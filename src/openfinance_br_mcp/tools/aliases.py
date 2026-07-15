@@ -7,7 +7,9 @@ truth. Adding a new bank still requires registering its adapter in
 updated in the same change.
 """
 
-from typing import Literal
+from typing import Annotated, Literal
+
+from pydantic import Field
 
 BankId = Literal[
     "nubank",
@@ -21,3 +23,22 @@ BankId = Literal[
     "picpay",
     "btg",
 ]
+
+ConsentScope = Literal[
+    "accounts",
+    "balances",
+    "transactions",
+    "overdraft_limits",
+    "credit_card_accounts",
+    "credit_card_limits",
+    "credit_card_bills",
+    "credit_card_transactions",
+    "bank_fixed_incomes",
+    "funds",
+    "variable_incomes",
+    "treasure_titles",
+]
+"""Data-sharing scopes accepted by the consent flow."""
+
+ConsentScopes = Annotated[list[ConsentScope], Field(min_length=1)]
+"""Non-empty, schema-constrained list of data-sharing scopes."""

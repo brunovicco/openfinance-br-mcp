@@ -102,7 +102,8 @@ def _mock_directory_and_discovery() -> None:
 
 def _fake_ctx(app_context: AppContext) -> SimpleNamespace:
     return SimpleNamespace(
-        request_context=SimpleNamespace(lifespan_context=app_context)
+        request_context=SimpleNamespace(lifespan_context=app_context),
+        elicit_url=AsyncMock(),
     )
 
 
@@ -185,9 +186,14 @@ class TestStartConsent:
         )
         directory = DirectoryClient(http_client, base_url=DIRECTORY_BASE)
         app = _app(http_client, directory=directory)
+        ctx = _fake_ctx(app)
 
         result = await inspect.unwrap(start_consent)(
-            SUBJECT_ID, "nubank", ["accounts", "transactions"], _fake_ctx(app)
+            SUBJECT_ID,
+            "nubank",
+            ["accounts", "transactions"],
+            ctx,
+            request_url_elicitation=True,
         )
 
         assert result.consent_id == "urn:bank:C1"
@@ -195,6 +201,8 @@ class TestStartConsent:
         assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == AUTHZ_ENDPOINT
         query = parse_qs(parsed.query)
         assert query["request_uri"] == ["urn:par:xyz"]
+        ctx.elicit_url.assert_awaited_once()
+        assert ctx.elicit_url.await_args.kwargs["url"] == result.authorization_url
 
         # The PAR request must embed the consent in its 'scope' claim,
         # per the FAPI-BR 'consent:<id>' convention.

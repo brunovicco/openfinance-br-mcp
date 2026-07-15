@@ -9,7 +9,7 @@ import inspect
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -20,6 +20,7 @@ from jwcrypto import jwt as jwcrypto_jwt
 
 from openfinance_br_mcp.auth.authorization_session import AuthorizationSessionStore
 from openfinance_br_mcp.auth.payment_consent import PaymentConsentManager
+from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.context import AppContext
@@ -60,10 +61,10 @@ def _nubank_organisation() -> dict[str, object]:
                     {
                         "ApiResourceId": "res-1",
                         "ApiVersion": "1.0.0",
-                        "ApiFamilyType": "payments-consents",
+                        "ApiFamilyType": "payments",
                         "Status": "Active",
                         "ApiDiscoveryEndpoints": [
-                            {"ApiEndpoint": (f"{PAYMENTS_BASE}/payments/v1/consents")}
+                            {"ApiEndpoint": (f"{PAYMENTS_BASE}/payments/v4/consents")}
                         ],
                     }
                 ],
@@ -91,7 +92,8 @@ def _mock_directory_and_discovery() -> None:
 
 def _fake_ctx(app_context: AppContext) -> SimpleNamespace:
     return SimpleNamespace(
-        request_context=SimpleNamespace(lifespan_context=app_context)
+        request_context=SimpleNamespace(lifespan_context=app_context),
+        elicit_url=AsyncMock(),
     )
 
 
@@ -192,15 +194,17 @@ class TestStartPaymentConsent:
                 200, json={"access_token": "cc-token", "expires_in": 300}
             )
         )
-        respx.post(f"{PAYMENTS_BASE}/payments/v1/consents").mock(
+        respx.post(f"{PAYMENTS_BASE}/payments/v4/consents").mock(
             return_value=httpx.Response(
                 201,
-                json={
-                    "data": {
-                        "consentId": "urn:bank:PC1",
-                        "status": "AWAITING_AUTHORISATION",
+                content=sign_payment_payload(
+                    {
+                        "data": {
+                            "consentId": "urn:bank:PC1",
+                            "status": "AWAITING_AUTHORISATION",
+                        }
                     }
-                },
+                ),
             )
         )
         respx.post(PAR_ENDPOINT).mock(
@@ -210,22 +214,34 @@ class TestStartPaymentConsent:
         )
         directory = DirectoryClient(http_client, base_url=DIRECTORY_BASE)
         app = _app(http_client, directory=directory)
+        app.principal_bindings.is_bound.return_value = False
+        ctx = _fake_ctx(app)
 
-        result = await inspect.unwrap(start_payment_consent)(
-            SUBJECT_ID,
-            "nubank",
-            "150.00",
-            "someone@example.com",
-            PixKeyType.EMAIL,
-            "acc-1",
-            _fake_ctx(app),
-        )
+        # A payment-only user has no principal/subject binding yet. Starting
+        # the bank authorization flow must remain possible because successful
+        # completion is what creates that binding.
+        with patch(
+            "openfinance_br_mcp.tools.principal_guard.get_access_token",
+            return_value=SimpleNamespace(client_id="remote-client", subject=None),
+        ):
+            result = await start_payment_consent(
+                SUBJECT_ID,
+                "nubank",
+                "150.00",
+                "someone@example.com",
+                PixKeyType.EMAIL,
+                "acc-1",
+                ctx,
+                request_url_elicitation=True,
+            )
 
         assert result.consent_id == "urn:bank:PC1"
         parsed = urlparse(result.authorization_url)
         assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == AUTHZ_ENDPOINT
         query = parse_qs(parsed.query)
         assert query["request_uri"] == ["urn:par:xyz"]
+        ctx.elicit_url.assert_awaited_once()
+        assert ctx.elicit_url.await_args.kwargs["url"] == result.authorization_url
 
 
 class TestCompletePaymentConsent:
@@ -264,9 +280,12 @@ class TestCompletePaymentConsent:
         bank_key = jwk.JWK.generate(kty="RSA", size=2048, kid="bank-kid-1")
         jwks = {"keys": [json.loads(bank_key.export_public())]}
         respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks))
-        respx.post(f"{PAYMENTS_BASE}/payments/v1/consents").mock(
+        respx.post(f"{PAYMENTS_BASE}/payments/v4/consents").mock(
             return_value=httpx.Response(
-                201, json={"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                201,
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC1", "status": "x"}}
+                ),
             )
         )
         respx.post(TOKEN_ENDPOINT).mock(
@@ -279,10 +298,12 @@ class TestCompletePaymentConsent:
                 },
             )
         )
-        respx.get(f"{PAYMENTS_BASE}/payments/v1/consents/urn:bank:PC1").mock(
+        respx.get(f"{PAYMENTS_BASE}/payments/v4/consents/urn:bank:PC1").mock(
             return_value=httpx.Response(
                 200,
-                json={"data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}},
+                content=sign_payment_payload(
+                    {"data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}}
+                ),
             )
         )
         directory = DirectoryClient(http_client, base_url=DIRECTORY_BASE)

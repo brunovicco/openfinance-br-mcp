@@ -12,10 +12,13 @@ services:
     tty: true
 
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-mock}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-console}
-      CLIENT_ID: ${CLIENT_ID:?CLIENT_ID is required}
-      CLIENT_SECRET: ${CLIENT_SECRET:?CLIENT_SECRET is required}
+      # Optional in the default mock environment; config.py requires
+      # non-empty values automatically in sandbox/production.
+      CLIENT_ID: ${CLIENT_ID:-}
+      CLIENT_SECRET: ${CLIENT_SECRET:-}
       MTLS_ENABLED: ${MTLS_ENABLED:-false}
       REDIRECT_URI: ${REDIRECT_URI:-https://localhost:8080/callback}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

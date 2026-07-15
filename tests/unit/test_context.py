@@ -246,6 +246,7 @@ class TestAppLifespan:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "environment", "sandbox")
+        monkeypatch.setattr(settings, "mtls_enabled", False)
         # Explicit opt-in to the fallback: an empty sandbox Directory
         # response means every bank fails to resolve, and the default
         # fail_closed behavior (P0.6) would otherwise leave
@@ -271,6 +272,7 @@ class TestAppLifespan:
         an empty Directory response must leave app.adapters empty
         rather than falling back to hardcoded URLs."""
         monkeypatch.setattr(settings, "environment", "sandbox")
+        monkeypatch.setattr(settings, "mtls_enabled", False)
         respx.get(f"{settings.bcb_sandbox_directory_url}participants").mock(
             return_value=httpx.Response(200, json=[])
         )

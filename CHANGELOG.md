@@ -14,8 +14,22 @@ item). Phase P0 (immediate risk blockers), part of P1 (per-family Directory
 resolution), and P2 (the Payments API v5 journey) are included here; sandbox
 validation (P3) is tracked separately.
 
+The latest MCP capability, contract, and deployment review is also included
+in this section.
+
 ### Fixed
 
+- **Payment-consent onboarding**: `start_payment_consent` no longer requires
+  an existing principal-to-subject binding, allowing a payment-only client to
+  start its first consent without a circular authorization dependency.
+- **Consent scope contract**: `start_consent.scopes` now exposes a non-empty
+  enum in its MCP input schema, and unsupported scopes are rejected during
+  protocol validation instead of being silently ignored.
+- **MCP tool metadata**: `start_consent.idempotentHint` is now `false`, matching
+  the fact that each call creates a new PAR request and authorization session.
+- **Blank client credentials**: empty `CLIENT_ID` and `CLIENT_SECRET` values
+  are normalized to missing values. This supports credential-free mock startup
+  while preserving strict validation in sandbox and production environments.
 - **Cross-bank token/consent collision**: `TokenStore` and `ConsentManager`
   now key state by `(bank_id, subject_id)` instead of `subject_id` alone -
   previously, authorizing a second bank for the same subject (e.g. CPF)
@@ -51,6 +65,14 @@ validation (P3) is tracked separately.
 
 ### Added
 
+- **MCP resource and prompt primitives**: the server now exposes the static
+  `openfinance://banks/` resource and the `analyze_monthly_spending` prompt,
+  demonstrating MCP capabilities beyond tools.
+- **URL elicitation for authorization flows**: `start_consent` and
+  `start_payment_consent` can optionally ask a compatible host to open the
+  authorization URL while retaining the URL response as a portable fallback.
+- **Server instructions**: MCP clients now receive concise guidance about
+  payment-consent safety, PIX idempotency, and the bank-catalog resource.
 - **MCP-principal-to-subject_id binding** (`auth/principal_binding.py`,
   `tools/principal_guard.py`): over `streamable-http` with MCP client OAuth
   configured, every tool taking `subject_id` now verifies the authenticated
@@ -154,6 +176,13 @@ validation (P3) is tracked separately.
 
 ### Changed
 
+- Docker Compose now starts in mock mode without placeholder credentials.
+  Kubernetes examples now include the OAuth and signing-key configuration
+  required for non-loopback Streamable HTTP, a readable private-key mount,
+  and a writable DSPy cache compatible with the read-only root filesystem.
+- README and validation documents now describe all 18 tools, the MCP resource
+  and prompt, optional URL elicitation, and the experimental status of real
+  payment integrations.
 - `initiate_pix` is no longer restricted to `environment=mock`. Outside
   mock mode it now requires an `AUTHORISED` payment consent for the
   subject/bank (obtained via `start_payment_consent`/

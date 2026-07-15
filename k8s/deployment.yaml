@@ -56,6 +56,8 @@ spec:
             - name: app-secrets
               mountPath: /app/secrets
               readOnly: true
+            - name: dspy-cache
+              mountPath: /app/.dspy_cache
 
           resources:
             requests:
@@ -91,11 +93,11 @@ spec:
         - name: mtls-certs
           secret:
             secretName: openfinance-mcp-mtls-certs
-            defaultMode: 0400
+            defaultMode: 0440
         - name: app-secrets
           secret:
             secretName: openfinance-mcp-secrets
-            defaultMode: 0400
+            defaultMode: 0440
             items:
               - key: client-id
                 path: CLIENT_ID
@@ -103,6 +105,10 @@ spec:
                 path: CLIENT_SECRET
               - key: anthropic-api-key
                 path: ANTHROPIC_API_KEY
+              - key: private-key.pem
+                path: private-key.pem
+        - name: dspy-cache
+          emptyDir: {}
 
       affinity:
         podAntiAffinity:

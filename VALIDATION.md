@@ -15,7 +15,7 @@ against the real sandbox and it worked."
 
 ## What has been validated
 
-- **Unit + integration test suite.** 342 tests, ~97% line coverage across
+- **Unit + integration test suite.** More than 400 tests, ~96% line coverage across
   `src/`, enforced by an 80% CI floor (`pytest --cov-fail-under=80`).
   Coverage is a floor, not a target - the suite is written to exercise
   real failure modes (wrong audience, expired token, mismatched mTLS

@@ -40,6 +40,7 @@ Example:
 """
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
@@ -166,7 +167,7 @@ class ConsentManager:
         bank_id: str,
         subject_id: str,
         bank_base_url: str,
-        scopes: list[str],
+        scopes: Sequence[str],
         access_token: str,
     ) -> str:
         """Creates a consent resource and returns its consentId.
@@ -245,7 +246,7 @@ class ConsentManager:
                 code="CONSENT_CREATE_ERROR",
             ) from exc
 
-        entry = {"data": data["data"], "scopes": scopes}
+        entry = {"data": data["data"], "scopes": list(scopes)}
         await self._set_cached(bank_id, subject_id, entry)
         consent_id = str(data["data"]["consentId"])
 
@@ -345,7 +346,7 @@ class ConsentManager:
         )
 
     @staticmethod
-    def _build_permissions(scopes: list[str]) -> list[str]:
+    def _build_permissions(scopes: Sequence[str]) -> list[str]:
         """Builds the list of BCB permissions from simplified scopes.
 
         Each simplified scope maps to exactly the BCB permission(s) it

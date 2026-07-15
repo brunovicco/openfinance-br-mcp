@@ -1,4 +1,4 @@
-"""Integration tests for MCP tool dispatch.
+"""Integration tests for MCP tools, resources, and prompts.
 
 Exercises the full protocol path (schema validation, tool execution,
 structured content, error translation) using the official in-memory
@@ -10,6 +10,7 @@ production-readiness roadmap) - these tests focus on MCP protocol
 behavior, not bank authentication.
 """
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
@@ -57,6 +58,7 @@ def _real_adapters(monkeypatch: pytest.MonkeyPatch):
     organisations, which is the opposite of what these tests need."""
     monkeypatch.setattr(settings, "environment", "sandbox")
     monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
+    monkeypatch.setattr(settings, "mtls_enabled", False)
     respx.get(f"{settings.bcb_sandbox_directory_url}participants").mock(
         return_value=httpx.Response(200, json=[])
     )
@@ -85,7 +87,7 @@ async def test_mock_mode_list_accounts_works_without_credentials_or_network():
 
 @pytest.mark.asyncio
 async def test_list_tools_returns_all_registered_tools():
-    """tools/list should return all 12 tools with input and output schemas."""
+    """tools/list should return all registered tools with input and output schemas."""
     mcp = build_server()
 
     async with create_connected_server_and_client_session(
@@ -103,6 +105,9 @@ async def test_list_tools_returns_all_registered_tools():
         "list_pix_keys",
         "initiate_pix",
         "list_investments",
+        "list_funds",
+        "list_variable_incomes",
+        "list_treasure_titles",
         "start_consent",
         "complete_consent",
         "check_consent_status",
@@ -114,6 +119,88 @@ async def test_list_tools_returns_all_registered_tools():
     for tool in result.tools:
         assert tool.inputSchema
         assert tool.outputSchema
+
+    start_consent_tool = next(
+        tool for tool in result.tools if tool.name == "start_consent"
+    )
+    assert start_consent_tool.annotations is not None
+    assert start_consent_tool.annotations.idempotentHint is False
+    scopes_schema = start_consent_tool.inputSchema["properties"]["scopes"]
+    assert scopes_schema["minItems"] == 1
+    assert set(scopes_schema["items"]["enum"]) == {
+        "accounts",
+        "balances",
+        "transactions",
+        "overdraft_limits",
+        "credit_card_accounts",
+        "credit_card_limits",
+        "credit_card_bills",
+        "credit_card_transactions",
+        "bank_fixed_incomes",
+        "funds",
+        "variable_incomes",
+        "treasure_titles",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scopes", [[], ["not_a_real_scope"]])
+async def test_start_consent_rejects_invalid_scopes_at_protocol_boundary(scopes):
+    mcp = build_server()
+
+    async with create_connected_server_and_client_session(
+        mcp, raise_exceptions=False
+    ) as session:
+        result = await session.call_tool(
+            "start_consent",
+            {"subject_id": "12345678900", "bank": "nubank", "scopes": scopes},
+        )
+
+    assert result.isError is True
+    assert "validation error" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
+async def test_resources_expose_current_bank_availability():
+    mcp = build_server()
+
+    async with create_connected_server_and_client_session(
+        mcp, raise_exceptions=True
+    ) as session:
+        listed = await session.list_resources()
+        result = await session.read_resource("openfinance://banks/")
+
+    assert [str(resource.uri) for resource in listed.resources] == [
+        "openfinance://banks/"
+    ]
+    payload = json.loads(result.contents[0].text)
+    assert payload["environment"] == "mock"
+    assert len(payload["banks"]) == 10
+    assert all(bank["configured"] is True for bank in payload["banks"])
+    assert all(bank["availability"] == "available" for bank in payload["banks"])
+
+
+@pytest.mark.asyncio
+async def test_prompt_renders_monthly_spending_workflow():
+    mcp = build_server()
+
+    async with create_connected_server_and_client_session(
+        mcp, raise_exceptions=True
+    ) as session:
+        listed = await session.list_prompts()
+        result = await session.get_prompt(
+            "analyze_monthly_spending",
+            arguments={
+                "bank": "nubank",
+                "date_from": "2026-06-01",
+                "date_to": "2026-06-30",
+                "category": "food",
+            },
+        )
+
+    assert [prompt.name for prompt in listed.prompts] == ["analyze_monthly_spending"]
+    assert "list_transactions" in result.messages[0].content.text
+    assert "food" in result.messages[0].content.text
 
 
 @pytest.mark.asyncio

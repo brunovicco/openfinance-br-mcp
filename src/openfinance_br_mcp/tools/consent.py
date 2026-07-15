@@ -55,7 +55,7 @@ from openfinance_br_mcp.exceptions import (
     ValidationError,
 )
 from openfinance_br_mcp.observability.tool_tracing import traced_tool
-from openfinance_br_mcp.tools.aliases import BankId
+from openfinance_br_mcp.tools.aliases import BankId, ConsentScopes
 from openfinance_br_mcp.tools.errors import translate_errors
 from openfinance_br_mcp.tools.principal_guard import require_principal_binding
 
@@ -117,7 +117,11 @@ def _require_directory(app: AppContext) -> None:
 @traced_tool
 @translate_errors
 async def start_consent(
-    subject_id: str, bank: BankId, scopes: list[str], ctx: AppRequestContext
+    subject_id: str,
+    bank: BankId,
+    scopes: ConsentScopes,
+    ctx: AppRequestContext,
+    request_url_elicitation: bool = False,
 ) -> StartConsentResult:
     """Starts the Open Finance Brasil consent flow for a user at a bank.
 
@@ -140,6 +144,10 @@ async def start_consent(
             consent (Payments API), not this data-sharing consent; see
             tools/pix.py.
         ctx: MCP request context, providing access to shared dependencies.
+        request_url_elicitation: Ask a compatible MCP client to open the
+            bank authorization URL using URL-mode elicitation. The URL is
+            always returned as well, so clients without elicitation support
+            can continue with the existing copy-and-open flow.
 
     Returns:
         The consent ID and the URL the user must open to authorize it.
@@ -197,6 +205,16 @@ async def start_consent(
             created_at=datetime.now(UTC),
         ),
     )
+
+    if request_url_elicitation:
+        await ctx.elicit_url(
+            message=(
+                f"Open {bank}'s authorization page to approve access to your "
+                "Open Finance data. Authentication happens directly at the bank."
+            ),
+            url=par_result.authorization_url,
+            elicitation_id=par_result.state,
+        )
 
     return StartConsentResult(
         bank=bank,
