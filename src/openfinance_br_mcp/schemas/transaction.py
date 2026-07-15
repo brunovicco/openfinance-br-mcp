@@ -57,11 +57,25 @@ class TransactionType(StrEnum):
 
 
 class PaymentType(StrEnum):
-    """Type of the authorized payment. Values are the literal strings
-    defined by the Open Finance Brasil spec and must not be translated."""
+    """Settlement status of the transaction ('completedAuthorisedPaymentType'
+    in the real API). Values are the literal strings defined by the
+    Open Finance Brasil spec and must not be translated.
 
-    DEBITO = "DEBITO"
-    CREDITO = "CREDITO"
+    Corrected against ``clients/accounts_v2_4_2/models/
+    enum_completed_authorised_payment_indicator.py`` (generated
+    directly from the official spec, P1.1) - this enum previously held
+    'DEBITO'/'CREDITO', a copy-paste duplicate of ``CreditDebitType``'s
+    values for an unrelated field. Against a real bank, constructing
+    ``PaymentType(raw["completedAuthorisedPaymentType"])`` with the
+    old member set would raise ``ValueError`` on every transaction
+    (the real field never sends 'DEBITO'/'CREDITO' - it describes
+    whether the transaction is settled/future/processing, not a debit/
+    credit direction, which is already covered by ``CreditDebitType``).
+    """
+
+    TRANSACAO_EFETIVADA = "TRANSACAO_EFETIVADA"
+    LANCAMENTO_FUTURO = "LANCAMENTO_FUTURO"
+    TRANSACAO_PROCESSANDO = "TRANSACAO_PROCESSANDO"
 
 
 class Transaction(BaseModel):

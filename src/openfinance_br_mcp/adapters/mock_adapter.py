@@ -157,7 +157,7 @@ class MockOpenFinanceAdapter(BankAdapter):
         transactions = [
             Transaction(
                 transaction_id="mock-tx-001",
-                completed_authorised_payment_type=PaymentType.DEBITO,
+                completed_authorised_payment_type=PaymentType.TRANSACAO_EFETIVADA,
                 credit_debit_type=CreditDebitType.DEBITO,
                 transaction_name="COMPRA IFOOD*RESTAURANTE",
                 type=TransactionType.PIX,
@@ -166,7 +166,7 @@ class MockOpenFinanceAdapter(BankAdapter):
             ),
             Transaction(
                 transaction_id="mock-tx-002",
-                completed_authorised_payment_type=PaymentType.CREDITO,
+                completed_authorised_payment_type=PaymentType.TRANSACAO_EFETIVADA,
                 credit_debit_type=CreditDebitType.CREDITO,
                 transaction_name="TRANSFERENCIA RECEBIDA",
                 type=TransactionType.PIX,

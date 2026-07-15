@@ -67,7 +67,7 @@ def _fake_ctx(app_context: AppContext) -> SimpleNamespace:
 def _sample_transaction() -> Transaction:
     return Transaction(
         transaction_id="tx_001",
-        completed_authorised_payment_type=PaymentType.DEBITO,
+        completed_authorised_payment_type=PaymentType.TRANSACAO_EFETIVADA,
         credit_debit_type=CreditDebitType.DEBITO,
         transaction_name="COMPRA IFOOD",
         type=TransactionType.PIX,
@@ -110,7 +110,11 @@ class TestNubankAdapterTransactions:
         from openfinance_br_mcp.exceptions import BankAdapterError
 
         url = f"{_NUBANK_BASE}/accounts/v2/accounts/{ACCOUNT_ID}/transactions"
-        respx.get(url).mock(return_value=httpx.Response(500))
+        # A body is required even for the error case - see
+        # test_bank_adapters.py::test_get_accounts_http_error_names_the_correct_bank
+        # for why an empty 500 response raises JSONDecodeError instead
+        # of the BankAdapterError this test expects.
+        respx.get(url).mock(return_value=httpx.Response(500, json={"errors": []}))
 
         async with httpx.AsyncClient() as client:
             adapter = NubankAdapter(token_store, client)

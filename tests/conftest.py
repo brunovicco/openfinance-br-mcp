@@ -88,6 +88,19 @@ async def nubank_adapter(
     return NubankAdapter(mock_token_store, mock_http_client)
 
 
+# Every generated model's 'links'/'meta' envelope is required and
+# strict about its own required fields (Links.self, Meta.totalRecords/
+# totalPages/requestDateTime - see clients/<family>/models/{links,meta}.py,
+# and tests/unit/test_bank_adapters.py's identical _LINKS/_META) - the
+# adapter now routes every request through the generated, typed
+# clients under clients/ (P1.1) instead of building the URL/params by
+# hand and parsing response.json() loosely, so these fixtures must
+# match the real, spec-verified response shape exactly, not just the
+# subset this project's own parsing previously happened to read.
+_LINKS = {"self": "https://example.com/resource"}
+_META = {"totalRecords": 1, "totalPages": 1, "requestDateTime": "2026-01-01T00:00:00Z"}
+
+
 @pytest.fixture
 def sample_account_response() -> dict:
     """JSON response simulating the Nubank accounts API.
@@ -103,13 +116,13 @@ def sample_account_response() -> dict:
                 "number": "12345-6",
                 "checkDigit": "6",
                 "type": "CONTA_DEPOSITO_A_VISTA",
-                "subtype": "INDIVIDUAL",
-                "currency": "BRL",
+                "brandName": "Nubank",
+                "companyCnpj": "18236120000158",
                 "compeCode": "260",
-                "ispb": "18236120",
             }
         ],
-        "meta": {"totalRecords": 1, "totalPages": 1},
+        "links": _LINKS,
+        "meta": _META,
     }
 
 
@@ -124,24 +137,27 @@ def sample_transaction_response() -> dict:
         "data": [
             {
                 "transactionId": "tx_001",
-                "completedAuthorisedPaymentType": "DEBITO",
+                "completedAuthorisedPaymentType": "TRANSACAO_EFETIVADA",
                 "creditDebitType": "DEBITO",
                 "transactionName": "COMPRA IFOOD*REFEICAO",
                 "type": "PIX",
-                "amount": "45.90",
-                "transactionDate": "2024-03-15",
+                "transactionAmount": {"amount": "45.90", "currency": "BRL"},
+                "transactionDateTime": "2024-03-15T00:00:00Z",
             },
             {
                 "transactionId": "tx_002",
-                "completedAuthorisedPaymentType": "CREDITO",
+                "completedAuthorisedPaymentType": "TRANSACAO_EFETIVADA",
                 "creditDebitType": "CREDITO",
                 "transactionName": "SALARIO EMPRESA XYZ",
                 "type": "FOLHA_PAGAMENTO",
-                "amount": "5000.00",
-                "transactionDate": "2024-03-05",
+                "transactionAmount": {"amount": "5000.00", "currency": "BRL"},
+                "transactionDateTime": "2024-03-05T00:00:00Z",
             },
         ],
-        "meta": {"totalRecords": 2, "totalPages": 1},
+        "links": _LINKS,
+        # 2 items in 'data' above - the shared _META's totalRecords=1
+        # would silently under-report this fixture's own item count.
+        "meta": {**_META, "totalRecords": 2},
     }
 
 
@@ -154,10 +170,13 @@ def sample_balance_response() -> dict:
     """
     return {
         "data": {
-            "availableAmount": "1250.75",
-            "blockedAmount": "0.00",
-            "automaticallyInvestedAmount": "500.00",
-        }
+            "availableAmount": {"amount": "1250.75", "currency": "BRL"},
+            "blockedAmount": {"amount": "0.00", "currency": "BRL"},
+            "automaticallyInvestedAmount": {"amount": "500.00", "currency": "BRL"},
+            "updateDateTime": "2026-01-01T00:00:00Z",
+        },
+        "links": _LINKS,
+        "meta": _META,
     }
 
 

@@ -34,7 +34,7 @@ from mcp.server.session import ServerSession
 from starlette.requests import Request
 
 from openfinance_br_mcp.adapters.banco_do_brasil import BancoDoBrasilAdapter
-from openfinance_br_mcp.adapters.base import BankAdapter
+from openfinance_br_mcp.adapters.base import BankAdapter, BankEndpoints
 from openfinance_br_mcp.adapters.bradesco import BradescoAdapter
 from openfinance_br_mcp.adapters.btg import BTGAdapter
 from openfinance_br_mcp.adapters.caixa import CaixaAdapter
@@ -175,6 +175,31 @@ def _build_http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(**kwargs)
 
 
+def _generated_client_httpx_args() -> dict[str, Any]:
+    """httpx.AsyncClient kwargs for every generated client's own internal client.
+
+    Each generated client (see
+    ``adapters/default_adapter.py::_generated_client``) lazily builds
+    and caches its own ``httpx.AsyncClient`` rather than reusing the
+    single shared one this module builds via ``_build_http_client`` -
+    a generated client's ``base_url`` differs per API family, which a
+    single shared client (with no fixed base_url of its own) can't
+    represent. This mirrors ``_build_http_client``'s mTLS/HTTP2 config
+    so those internal clients present the same certificate; only
+    called from ``_build_real_adapters``, itself only reached outside
+    ``environment == 'mock'`` (see ``app_lifespan``), so no separate
+    mock-mode guard is needed here unlike ``_build_http_client``.
+
+    Returns:
+        kwargs dict for ``adapter.configure_generated_clients(...,
+        httpx_args=...)``.
+    """
+    kwargs: dict[str, Any] = {"http2": True}
+    if settings.mtls_enabled:
+        kwargs["cert"] = (settings.mtls_cert_path, settings.mtls_key_path)
+    return kwargs
+
+
 def _build_shared_store() -> KeyValueStore:
     """Builds the store shared by TokenStore and ConsentManager.
 
@@ -204,25 +229,33 @@ async def _build_mock_adapters() -> dict[str, BankAdapter]:
 # see _build_real_adapters). Each can be published at a different base
 # URL/version/authorization server by the Directory of Participants;
 # resolving only 'accounts' and reusing that URL for all of them
-# (the previous behavior) silently assumed they matched, which isn't
-# guaranteed. See adapters/default_adapter.py::set_family_base_urls.
+# (the pre-P1.2 behavior) silently assumed they matched, which isn't
+# guaranteed. See adapters/default_adapter.py::set_endpoints. Maps each
+# Directory ApiFamilyType (hyphenated, as published) to the matching
+# BankEndpoints field name (underscored) - 'consents', 'funds',
+# 'variable-incomes', and 'treasure-titles' were added in P1.2's
+# review pass; only 'credit-cards-accounts'/'payments'/
+# 'bank-fixed-incomes' were resolved before it, since those were the
+# only families DefaultOpenFinanceAdapter had methods for at the time.
 _ADDITIONAL_API_FAMILIES = (
     "credit-cards-accounts",
     "payments",
+    "consents",
     "bank-fixed-incomes",
+    "funds",
+    "variable-incomes",
+    "treasure-titles",
 )
 
 
-async def _resolve_family_base_urls(
-    directory: DirectoryClient, bank_id: str
-) -> dict[str, str]:
+async def _resolve_endpoints(directory: DirectoryClient, bank_id: str) -> BankEndpoints:
     """Resolves every additional API family's base URL for one bank.
 
     Best-effort per family: a family the Directory doesn't publish (or
-    fails to resolve) for this bank is simply left out of the returned
-    dict - DefaultOpenFinanceAdapter._url_for falls back to the
-    adapter's main ('accounts') base_url for any missing family, so a
-    partial result here degrades gracefully rather than failing the
+    fails to resolve) for this bank is simply left unset on the
+    returned catalog - DefaultOpenFinanceAdapter._url_for falls back to
+    the adapter's main ('accounts') base_url for any missing family, so
+    a partial result here degrades gracefully rather than failing the
     whole adapter.
 
     Args:
@@ -230,10 +263,10 @@ async def _resolve_family_base_urls(
         bank_id: Identifier used by this project's adapters.
 
     Returns:
-        Mapping of resolved ApiFamilyType to base URL, for whichever
-        families resolved successfully.
+        BankEndpoints with whichever families resolved successfully
+        set, and the rest left as ``None``.
     """
-    family_base_urls: dict[str, str] = {}
+    resolved_urls: dict[str, str] = {}
     for family in _ADDITIONAL_API_FAMILIES:
         try:
             resolved: ResolvedApi = await directory.resolve(bank_id, family)
@@ -250,14 +283,14 @@ async def _resolve_family_base_urls(
                 ),
             )
             continue
-        family_base_urls[family] = resolved.base_url
+        resolved_urls[family.replace("-", "_")] = resolved.base_url
         log.info(
             "family_resolution_ok",
             bank_id=bank_id,
             api_family_type=family,
             base_url=resolved.base_url,
         )
-    return family_base_urls
+    return BankEndpoints(**resolved_urls)
 
 
 async def _build_real_adapters(
@@ -311,8 +344,10 @@ async def _build_real_adapters(
             )
             if fallback_allowed:
                 adapter = adapter_cls(token_store, http_client)
-                adapter.set_family_base_urls(
-                    await _resolve_family_base_urls(directory, bank_id)
+                adapter.set_endpoints(await _resolve_endpoints(directory, bank_id))
+                adapter.configure_generated_clients(
+                    timeout=httpx.Timeout(settings.http_timeout_seconds),
+                    httpx_args=_generated_client_httpx_args(),
                 )
                 adapters[bank_id] = adapter
             continue
@@ -338,8 +373,10 @@ async def _build_real_adapters(
                 adapter = adapter_cls(
                     token_store, http_client, base_url=resolved.base_url
                 )
-                adapter.set_family_base_urls(
-                    await _resolve_family_base_urls(directory, bank_id)
+                adapter.set_endpoints(await _resolve_endpoints(directory, bank_id))
+                adapter.configure_generated_clients(
+                    timeout=httpx.Timeout(settings.http_timeout_seconds),
+                    httpx_args=_generated_client_httpx_args(),
                 )
                 adapters[bank_id] = adapter
             continue
@@ -355,8 +392,12 @@ async def _build_real_adapters(
             base_url=resolved.base_url,
             token_endpoint=token_endpoint,
         )
-        family_base_urls = await _resolve_family_base_urls(directory, bank_id)
-        adapter.set_family_base_urls(family_base_urls)
+        endpoints = await _resolve_endpoints(directory, bank_id)
+        adapter.set_endpoints(endpoints)
+        adapter.configure_generated_clients(
+            timeout=httpx.Timeout(settings.http_timeout_seconds),
+            httpx_args=_generated_client_httpx_args(),
+        )
         adapters[bank_id] = adapter
 
     return adapters
@@ -416,6 +457,8 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
             directory=directory,
         )
     finally:
+        for adapter in adapters.values():
+            await adapter.aclose()
         await http_client.aclose()
         if isinstance(shared_store, RedisStore):
             await shared_store.aclose()

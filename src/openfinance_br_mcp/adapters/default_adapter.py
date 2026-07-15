@@ -10,6 +10,43 @@ and only need to supply ``bank_id`` and their own ``base_url``/
 still name itself explicitly, including in error messages and parsing
 defaults - never hardcode a specific bank's name in this shared class.
 
+Since P1.1, every request that has a generated, typed client under
+``clients/`` (accounts, credit-cards-accounts, bank-fixed-incomes)
+goes through it instead of building URLs/params by hand and calling
+``self._http`` directly - see ``_accounts_client``/
+``_credit_cards_client``/``_bank_fixed_incomes_client``, which inject
+this adapter's shared mTLS-configured ``self._http`` into a freshly
+constructed generated ``AuthenticatedClient`` via
+``set_async_httpx_client`` (see ``clients/<family>/client.py``). The
+Payments API's write endpoints (``POST /consents``, ``POST
+/pix/payments``) remain hand-written in ``initiate_pix`` below and in
+``auth/payment_consent.py``: ``openapi-python-client`` cannot generate
+typed methods for ``application/jwt`` (JWS) request bodies, a known,
+permanent limitation (see ``clients/__init__.py``). ``list_pix_keys``
+also remains hand-written: it is a proprietary, non-standard
+extension with no equivalent in the official Accounts family spec at
+all (see its own docstring below).
+
+Rewiring onto the generated, spec-verified clients surfaced several
+real parsing bugs beyond the credit-card-limits one already tracked in
+IMPLEMENTATION_PLAN.md P1.1 - every BCB monetary field is actually a
+nested ``{"amount": ..., "currency": ...}`` sub-object, not a flat
+string as this file previously assumed (``get_balance``,
+``get_credit_card_bills``, ``list_transactions``'s transaction amount,
+``list_investments``'s gross/net amount all read a flat key that a
+real bank's response never has - either silently defaulting to "0" or,
+for the bill amounts, crashing Pydantic validation with a dict where a
+Decimal was expected). ``_extract_amount``/``_extract_optional_amount``
+below centralize unwrapping that sub-object. Separately,
+``completed_authorised_payment_type`` on a transaction used
+``schemas.transaction.PaymentType``, which held 'DEBITO'/'CREDITO' - a
+copy-paste duplicate of ``CreditDebitType``'s values for a field that
+per the real spec's ``EnumCompletedAuthorisedPaymentIndicator``
+actually takes 'TRANSACAO_EFETIVADA'/'LANCAMENTO_FUTURO'/
+'TRANSACAO_PROCESSANDO'; constructing the old enum with a real value
+would raise ``ValueError`` on every transaction. Fixed at the schema
+level (see ``schemas/transaction.py``).
+
 Example:
     >>> class MyBankAdapter(DefaultOpenFinanceAdapter):
     ...     @property
@@ -17,15 +54,78 @@ Example:
     ...         return "my_bank"
 """
 
+import asyncio
 from datetime import UTC, datetime
 from datetime import date as dt_date
+from http import HTTPStatus
 from typing import Any
 
 import httpx
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from openfinance_br_mcp.adapters.base import BankAdapter, build_fapi_headers
+from clients.accounts_v2_4_2.api.accounts import (
+    accounts_get_accounts,
+    accounts_get_accounts_account_id_balances,
+    accounts_get_accounts_account_id_transactions,
+)
+from clients.accounts_v2_4_2.client import AuthenticatedClient as AccountsAuthClient
+from clients.accounts_v2_4_2.models.response_account_balances import (
+    ResponseAccountBalances,
+)
+from clients.accounts_v2_4_2.models.response_account_list import ResponseAccountList
+from clients.accounts_v2_4_2.models.response_account_transactions import (
+    ResponseAccountTransactions,
+)
+from clients.accounts_v2_4_2.types import UNSET as ACCOUNTS_UNSET
+from clients.bank_fixed_incomes_v1_1_0.api.balances import (
+    bankt_fixed_incomes_get_investments_investment_id_balances as bfi_get_balances,
+)
+from clients.bank_fixed_incomes_v1_1_0.api.product_identification import (
+    bankt_fixed_incomes_get_investments_investment_id as bfi_get_product_identification,
+)
+from clients.bank_fixed_incomes_v1_1_0.api.product_list import (
+    bankt_fixed_incomes_get_investments as bfi_get_investments,
+)
+from clients.bank_fixed_incomes_v1_1_0.client import (
+    AuthenticatedClient as BankFixedIncomesAuthClient,
+)
+from clients.bank_fixed_incomes_v1_1_0.models.response_bank_fixed_incomes_balances import (  # noqa: E501
+    ResponseBankFixedIncomesBalances,
+)
+from clients.bank_fixed_incomes_v1_1_0.models.response_bank_fixed_incomes_product_identification import (  # noqa: E501
+    ResponseBankFixedIncomesProductIdentification,
+)
+from clients.bank_fixed_incomes_v1_1_0.models.response_bank_fixed_incomes_product_list import (  # noqa: E501
+    ResponseBankFixedIncomesProductList,
+)
+from clients.credit_cards_v2_3_1.api.credit_card import (
+    credit_cards_get_accounts,
+)
+from clients.credit_cards_v2_3_1.api.credit_card import (
+    credit_cards_get_accounts_credit_card_account_id_bills as cc_get_bills,
+)
+from clients.credit_cards_v2_3_1.api.credit_card import (
+    credit_cards_get_accounts_credit_card_account_id_limits as cc_get_limits,
+)
+from clients.credit_cards_v2_3_1.client import (
+    AuthenticatedClient as CreditCardsAuthClient,
+)
+from clients.credit_cards_v2_3_1.models.response_credit_card_accounts_bills import (
+    ResponseCreditCardAccountsBills,
+)
+from clients.credit_cards_v2_3_1.models.response_credit_card_accounts_limits import (
+    ResponseCreditCardAccountsLimits,
+)
+from clients.credit_cards_v2_3_1.models.response_credit_card_accounts_list import (
+    ResponseCreditCardAccountsList,
+)
+from openfinance_br_mcp.adapters.base import (
+    BankAdapter,
+    BankEndpoints,
+    build_fapi_call_kwargs,
+    build_fapi_headers,
+)
 from openfinance_br_mcp.auth.payment_jws import (
     decode_payment_response_unverified,
     sign_payment_payload,
@@ -67,6 +167,22 @@ from openfinance_br_mcp.schemas.transaction import (
 
 log = structlog.get_logger(__name__)
 
+# The stable version path segment this project targets for each API
+# family (see IMPLEMENTATION_PLAN.md P1.1's note on verified versions),
+# used to build the fully-versioned base URL a generated client needs
+# from the Directory's '/open-banking'-only ResolvedApi.base_url - see
+# _client_base_url.
+_FAMILY_VERSIONS: dict[str, str] = {
+    "accounts": "v2",
+    "credit-cards-accounts": "v2",
+    "payments": "v4",
+    "consents": "v3",
+    "bank-fixed-incomes": "v1",
+    "funds": "v1",
+    "variable-incomes": "v1",
+    "treasure-titles": "v1",
+}
+
 
 class DefaultOpenFinanceAdapter(BankAdapter):
     """BCB-schema Open Finance adapter, neutral across institutions.
@@ -94,9 +210,51 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         super().__init__(token_store, http_client)
         self._base_url = base_url
         self._token_endpoint = token_endpoint
-        self._family_base_urls: dict[str, str] = {}
+        self._endpoints = BankEndpoints()
+        # Lazily-built, per-family generated clients - see
+        # _generated_client for why these can't just reuse self._http.
+        self._generated_clients: dict[str, Any] = {}
+        # Deliberately NOT derived from global `settings` here (e.g.
+        # settings.mtls_enabled) - this adapter must stay constructible
+        # and usable with a bare, cert-less http_client in tests (see
+        # tests/unit/test_bank_adapters.py, which never calls
+        # configure_generated_clients below) without ever touching a
+        # real filesystem cert path. context.py::_build_real_adapters
+        # calls configure_generated_clients explicitly for real,
+        # non-mock adapters, passing the same mTLS config self._http
+        # itself was built with (see _build_http_client).
+        self._generated_client_timeout = httpx.Timeout(30.0)
+        self._generated_client_httpx_args: dict[str, Any] = {"http2": True}
 
-    def set_family_base_urls(self, family_base_urls: dict[str, str]) -> None:
+    def configure_generated_clients(
+        self, *, timeout: httpx.Timeout, httpx_args: dict[str, Any]
+    ) -> None:
+        """Configures the httpx.AsyncClient each generated client lazily builds.
+
+        See ``_generated_client`` for why generated clients can't just
+        reuse ``self._http`` and instead each lazily build/cache their
+        own internal ``httpx.AsyncClient``. Not set from the
+        constructor (see the comment above the defaults in
+        ``__init__``) so adapters stay safely constructible in tests
+        without ever touching a real mTLS cert path - only
+        ``context.py::_build_real_adapters`` calls this, mirroring the
+        same config ``self._http`` itself was built with.
+
+        Args:
+            timeout: Request timeout for every generated client's
+                internal httpx.AsyncClient.
+            httpx_args: Extra ``httpx.AsyncClient`` kwargs (e.g.
+                ``{'http2': True, 'cert': (cert_path, key_path)}``).
+
+        Resets the per-family generated-client cache (see
+        ``_generated_client``): any client already built from the old
+        config would otherwise keep using it.
+        """
+        self._generated_client_timeout = timeout
+        self._generated_client_httpx_args = httpx_args
+        self._generated_clients.clear()
+
+    def set_endpoints(self, endpoints: BankEndpoints) -> None:
         """Overrides per-API-family base URLs resolved via the Directory.
 
         Each Open Finance Brasil API family (accounts,
@@ -104,7 +262,7 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         variable-incomes...) can be published at a different base URL,
         version, and even authorization server by the Directory of
         Participants - resolving only 'accounts' and reusing that
-        single base_url for every other family (the previous behavior)
+        single base_url for every other family (the pre-P1.2 behavior)
         silently assumed they all matched, which is not guaranteed.
         Set via a mutator rather than the constructor so every existing
         concrete adapter subclass (NubankAdapter, SicoobAdapter, ...)
@@ -113,13 +271,20 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         resolved.
 
         Args:
-            family_base_urls: Mapping of Directory ``ApiFamilyType`` to
-                its resolved base URL (e.g. {'credit-cards-accounts':
-                'https://.../open-banking'}). A family missing from
-                this dict falls back to ``self.base_url`` (see
+            endpoints: Typed catalog of resolved base URLs (see
+                ``adapters/base.py::BankEndpoints`` - each field is the
+                bare '/open-banking'-prefixed URL the Directory
+                returns; ``_client_base_url`` appends the family +
+                version segment on top of it). A family absent from
+                this catalog falls back to ``self.base_url`` (see
                 ``_url_for``).
+
+        Resets the per-family generated-client cache (see
+        ``_generated_client``): any client built from the old catalog
+        would otherwise keep pointing at a stale base_url.
         """
-        self._family_base_urls = family_base_urls
+        self._endpoints = endpoints
+        self._generated_clients.clear()
 
     def _url_for(self, api_family_type: str) -> str:
         """Returns the base URL to use for a given API family.
@@ -130,14 +295,221 @@ class DefaultOpenFinanceAdapter(BankAdapter):
                 'bank-fixed-incomes').
 
         Returns:
-            The family-specific base URL if one was resolved via
-            ``set_family_base_urls``, otherwise ``self.base_url``
+            The family-specific, versioned base URL if one was
+            resolved via ``set_endpoints``, otherwise ``self.base_url``
             (this adapter's default/'accounts' base URL - preserves
             prior behavior when per-family resolution isn't available,
             e.g. in mock mode or when the Directory doesn't publish
             that family for this bank).
         """
-        return self._family_base_urls.get(api_family_type, self._base_url)
+        return self._endpoints.get_or(api_family_type, self._base_url)
+
+    def _client_base_url(self, api_family_type: str) -> str:
+        """Returns the fully-versioned base URL a generated client needs.
+
+        A generated client's operation functions build request URLs as
+        paths relative to its ``base_url`` (e.g. '/accounts',
+        '/accounts/{id}/balances') - it must be constructed with the
+        family + version segment already included
+        ('.../open-banking/accounts/v2'), not just the bare
+        '/open-banking' prefix ``_url_for`` (and the Directory itself)
+        returns.
+
+        Args:
+            api_family_type: Directory ApiFamilyType - must be a key of
+                ``_FAMILY_VERSIONS``.
+
+        Returns:
+            The versioned base URL for this family.
+        """
+        version = _FAMILY_VERSIONS[api_family_type]
+        return f"{self._url_for(api_family_type)}/{api_family_type}/{version}"
+
+    def _generated_client(
+        self, api_family_type: str, client_cls: type[Any]
+    ) -> Any:
+        """Returns the cached generated client for a family, building it
+        on first use.
+
+        A generated client's ``base_url`` differs per API family (see
+        ``_client_base_url``), so it cannot simply reuse this adapter's
+        single shared ``self._http`` (whose own ``base_url`` is unset/
+        shared across every bank and family, which would make every
+        generated operation's relative URL - e.g. '/accounts' -
+        resolve to a host-less, broken request; confirmed by direct
+        testing: ``client.set_async_httpx_client(self._http)`` makes
+        ``get_async_httpx_client()`` return ``self._http``
+        unconditionally, discarding the generated client's own
+        ``base_url`` entirely). Each generated client therefore lazily
+        builds and caches its *own* internal ``httpx.AsyncClient``,
+        configured via ``configure_generated_clients`` (defaults to a
+        plain, cert-less client - see that method's docstring for why)
+        - ``timeout`` is the ``Client`` dataclass's own field (it
+        forwards it to ``httpx.AsyncClient`` itself), while
+        ``cert``/``http2`` go through ``httpx_args`` (passing
+        ``timeout`` through both would collide: 'got multiple values
+        for keyword argument timeout', confirmed by testing).
+
+        Args:
+            api_family_type: Directory ApiFamilyType - must be a key of
+                ``_FAMILY_VERSIONS``, and the cache key used here.
+            client_cls: The family's generated ``AuthenticatedClient``
+                class (e.g. ``clients.accounts_v2_4_2.client
+                .AuthenticatedClient``).
+
+        Returns:
+            A ``client_cls`` instance targeting this family's
+            versioned base URL. ``token=""`` is a required-but-unused
+            field on ``AuthenticatedClient`` (see
+            ``build_fapi_call_kwargs``'s docstring) - this project
+            always passes ``authorization`` per call instead of
+            relying on the client's own token-injection.
+        """
+        cached = self._generated_clients.get(api_family_type)
+        if cached is None:
+            cached = client_cls(
+                base_url=self._client_base_url(api_family_type),
+                token="",
+                timeout=self._generated_client_timeout,
+                httpx_args=self._generated_client_httpx_args,
+            )
+            self._generated_clients[api_family_type] = cached
+        return cached
+
+    def _accounts_client(self) -> AccountsAuthClient:
+        """Returns the cached generated Accounts API client for this bank.
+
+        Returns:
+            AuthenticatedClient ready to pass to any
+            ``clients.accounts_v2_4_2.api.accounts.*`` operation.
+        """
+        client: AccountsAuthClient = self._generated_client(
+            "accounts", AccountsAuthClient
+        )
+        return client
+
+    def _credit_cards_client(self) -> CreditCardsAuthClient:
+        """Returns the cached generated Credit Cards Accounts API client.
+
+        Returns:
+            AuthenticatedClient ready to pass to any
+            ``clients.credit_cards_v2_3_1.api.credit_card.*`` operation.
+        """
+        client: CreditCardsAuthClient = self._generated_client(
+            "credit-cards-accounts", CreditCardsAuthClient
+        )
+        return client
+
+    def _bank_fixed_incomes_client(self) -> BankFixedIncomesAuthClient:
+        """Returns the cached generated Bank Fixed Incomes API client.
+
+        Returns:
+            AuthenticatedClient ready to pass to any
+            ``clients.bank_fixed_incomes_v1_1_0.api.*`` operation.
+        """
+        client: BankFixedIncomesAuthClient = self._generated_client(
+            "bank-fixed-incomes", BankFixedIncomesAuthClient
+        )
+        return client
+
+    async def aclose(self) -> None:
+        """Closes every lazily-built per-family generated-client httpx.AsyncClient.
+
+        Called during server shutdown (see
+        ``context.py::app_lifespan``) - each cached generated client
+        (see ``_generated_client``) owns its own internal
+        ``httpx.AsyncClient``, separate from ``self._http`` (which the
+        caller closes itself), and those need their own explicit close
+        to avoid leaking connections.
+        """
+        for client in self._generated_clients.values():
+            await client.get_async_httpx_client().aclose()
+        self._generated_clients.clear()
+
+    def _require(self, response: Any, expected_type: type, action: str) -> Any:
+        """Unwraps a generated operation's Response, or raises.
+
+        Every generated operation's ``asyncio_detailed`` returns a
+        ``Response[SuccessModel | ResponseError]`` (or
+        ``ResponseErrorMetaSingle`` for some families) - this checks
+        for HTTP 200 and the expected success model in one place
+        instead of repeating the same two-part check at every call
+        site.
+
+        Args:
+            response: The ``Response`` returned by a generated
+                operation's ``asyncio_detailed``.
+            expected_type: The success model class expected on 200
+                (e.g. ``ResponseAccountList``).
+            action: Short description of the call, used in the error
+                message (e.g. 'listing accounts').
+
+        Returns:
+            ``response.parsed``, narrowed to ``expected_type``.
+
+        Raises:
+            BankAdapterError: If the status isn't 200 or the parsed
+                body isn't the expected success model.
+        """
+        status_code = int(response.status_code)
+        if status_code != HTTPStatus.OK or not isinstance(
+            response.parsed, expected_type
+        ):
+            raise BankAdapterError(
+                f"{self.bank_id}: error {action}: {status_code}",
+                bank_id=self.bank_id,
+                status_code=status_code,
+            )
+        return response.parsed
+
+    @staticmethod
+    def _extract_amount(raw: dict[str, Any], key: str, default: str = "0") -> str:
+        """Unwraps a required BCB monetary sub-object into a plain string.
+
+        Every monetary value in the real Open Finance Brasil APIs is a
+        nested ``{"amount": "123.45", "currency": "BRL"}`` object, not
+        a flat string directly on the parent object - confirmed via
+        the generated models (e.g.
+        ``clients/accounts_v2_4_2/models/account_balances_data.py``),
+        which this file's parsing previously didn't account for (see
+        this module's docstring).
+
+        Args:
+            raw: The parent dict (already unwrapped via a generated
+                model's ``.to_dict()``).
+            key: The camelCase key holding the amount sub-object (e.g.
+                'availableAmount').
+            default: Returned if the key is missing or its 'amount'
+                sub-key is missing.
+
+        Returns:
+            The amount as a string, ready for a Pydantic ``Decimal``
+            field.
+        """
+        value = raw.get(key)
+        if isinstance(value, dict):
+            amount = value.get("amount")
+            return str(amount) if amount is not None else default
+        if value is None:
+            return default
+        return str(value)
+
+    @staticmethod
+    def _extract_optional_amount(raw: dict[str, Any], key: str) -> str | None:
+        """Same as ``_extract_amount``, for optional monetary fields.
+
+        Args:
+            raw: The parent dict.
+            key: The camelCase key holding the amount sub-object.
+
+        Returns:
+            The amount as a string, or ``None`` if absent.
+        """
+        value = raw.get(key)
+        if isinstance(value, dict):
+            amount = value.get("amount")
+            return str(amount) if amount is not None else None
+        return str(value) if value is not None else None
 
     @property
     def base_url(self) -> str:
@@ -175,20 +547,13 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             BankAdapterError: On a non-recoverable HTTP failure.
         """
         token = await self._get_token(subject_id)
-        try:
-            response = await self._http.get(
-                f"{self._url_for('accounts')}/accounts/v2/accounts",
-                headers=build_fapi_headers(token),
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise BankAdapterError(
-                f"{self.bank_id}: error listing accounts: {exc.response.status_code}",
-                bank_id=self.bank_id,
-                status_code=exc.response.status_code,
-            ) from exc
+        client = self._accounts_client()
+        response = await accounts_get_accounts.asyncio_detailed(
+            client=client, **build_fapi_call_kwargs(token)
+        )
+        parsed = self._require(response, ResponseAccountList, "listing accounts")
 
-        raw = response.json()
+        raw = parsed.to_dict()
         accounts = [self._parse_account(item) for item in raw.get("data", [])]
         meta = raw.get("meta", {})
         return AccountList(
@@ -211,25 +576,20 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             BankAdapterError: On an HTTP failure.
         """
         token = await self._get_token(subject_id)
-        try:
-            response = await self._http.get(
-                f"{self._url_for('accounts')}/accounts/v2/accounts/{account_id}/balances",
-                headers=build_fapi_headers(token),
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise BankAdapterError(
-                f"{self.bank_id}: error fetching balance: {exc.response.status_code}",
-                bank_id=self.bank_id,
-                status_code=exc.response.status_code,
-            ) from exc
+        client = self._accounts_client()
+        response = await accounts_get_accounts_account_id_balances.asyncio_detailed(
+            account_id, client=client, **build_fapi_call_kwargs(token)
+        )
+        parsed = self._require(response, ResponseAccountBalances, "fetching balance")
 
-        raw = response.json().get("data", {})
+        raw = parsed.to_dict().get("data", {})
         return AccountBalance(
             account_id=account_id,
-            available_amount=raw.get("availableAmount", "0"),
-            blocked_amount=raw.get("blockedAmount", "0"),
-            automatically_invested_amount=raw.get("automaticallyInvestedAmount", "0"),
+            available_amount=self._extract_amount(raw, "availableAmount"),
+            blocked_amount=self._extract_amount(raw, "blockedAmount"),
+            automatically_invested_amount=self._extract_amount(
+                raw, "automaticallyInvestedAmount"
+            ),
         )
 
     @retry(
@@ -255,32 +615,23 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             BankAdapterError: On an HTTP failure.
         """
         token = await self._get_token(subject_id)
-        params: dict[str, str | int] = {
-            "page": filters.page,
-            "page-size": filters.page_size,
-        }
-        if filters.date_from:
-            params["fromBookingDate"] = filters.date_from.isoformat()
-        if filters.date_to:
-            params["toBookingDate"] = filters.date_to.isoformat()
+        client = self._accounts_client()
+        response = await accounts_get_accounts_account_id_transactions.asyncio_detailed(
+            filters.account_id,
+            client=client,
+            page=filters.page,
+            page_size=filters.page_size,
+            from_booking_date=(
+                filters.date_from if filters.date_from else ACCOUNTS_UNSET
+            ),
+            to_booking_date=filters.date_to if filters.date_to else ACCOUNTS_UNSET,
+            **build_fapi_call_kwargs(token),
+        )
+        parsed = self._require(
+            response, ResponseAccountTransactions, "listing transactions"
+        )
 
-        try:
-            response = await self._http.get(
-                f"{self._url_for('accounts')}/accounts/v2/accounts/"
-                f"{filters.account_id}/transactions",
-                headers=build_fapi_headers(token),
-                params=params,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise BankAdapterError(
-                f"{self.bank_id}: error listing transactions: "
-                f"{exc.response.status_code}",
-                bank_id=self.bank_id,
-                status_code=exc.response.status_code,
-            ) from exc
-
-        raw = response.json()
+        raw = parsed.to_dict()
         transactions = [self._parse_transaction(item) for item in raw.get("data", [])]
         meta = raw.get("meta", {})
         return TransactionList(
@@ -294,6 +645,16 @@ class DefaultOpenFinanceAdapter(BankAdapter):
     ) -> list[CreditCardAccount]:
         """Lists credit card accounts.
 
+        Per-account available/total credit limits are fetched via a
+        separate call to the '/limits' endpoint (see
+        ``_fetch_credit_card_limits``) and merged in before parsing -
+        the real Credit Cards Accounts spec never returns them inline
+        on the account list itself (confirmed against the generated
+        ``CreditCardAccountsData`` model, see this module's
+        docstring), unlike this method's pre-P1.1 assumption. A
+        per-card limits fetch failure is logged and simply leaves that
+        card's limits unset rather than failing the whole listing.
+
         Args:
             subject_id: User ID.
 
@@ -301,14 +662,82 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             List of credit card accounts.
         """
         token = await self._get_token(subject_id)
-        response = await self._http.get(
-            f"{self._url_for('credit-cards-accounts')}/credit-cards-accounts/v2/accounts",
-            headers=build_fapi_headers(token),
+        client = self._credit_cards_client()
+        response = await credit_cards_get_accounts.asyncio_detailed(
+            client=client, **build_fapi_call_kwargs(token)
         )
-        response.raise_for_status()
-        return [
-            self._parse_credit_card(item) for item in response.json().get("data", [])
-        ]
+        parsed = self._require(
+            response, ResponseCreditCardAccountsList, "listing credit cards"
+        )
+        raw_accounts: list[dict[str, Any]] = parsed.to_dict().get("data", [])
+
+        limits_results = await asyncio.gather(
+            *(
+                self._fetch_credit_card_limits(
+                    client, token, item["creditCardAccountId"]
+                )
+                for item in raw_accounts
+            ),
+            return_exceptions=True,
+        )
+        for item, limits in zip(raw_accounts, limits_results, strict=True):
+            if isinstance(limits, BaseException):
+                log.warning(
+                    "credit_card_limits_fetch_failed",
+                    bank_id=self.bank_id,
+                    credit_card_account_id=item.get("creditCardAccountId"),
+                    error=str(limits),
+                )
+                continue
+            if limits is not None:
+                available, total = limits
+                item["availableCreditLimit"] = available
+                item["totalCreditLimit"] = total
+
+        return [self._parse_credit_card(item) for item in raw_accounts]
+
+    async def _fetch_credit_card_limits(
+        self, client: CreditCardsAuthClient, token: str, credit_card_account_id: str
+    ) -> tuple[str | None, str | None] | None:
+        """Fetches and extracts the total credit limit for one card.
+
+        Args:
+            client: Generated Credit Cards Accounts client.
+            token: Access token for this call.
+            credit_card_account_id: ID of the card account.
+
+        Returns:
+            ``(available_amount, total_amount)`` from the limit record
+            whose ``creditLineLimitType`` is 'LIMITE_CREDITO_TOTAL' (the
+            consolidated total, as opposed to a per-modality limit) -
+            or ``None`` if the call fails or no such record is present
+            (some institutions may only publish per-modality limits).
+        """
+        response = await cc_get_limits.asyncio_detailed(
+            credit_card_account_id, client=client, **build_fapi_call_kwargs(token)
+        )
+        status_code = int(response.status_code)
+        if status_code != HTTPStatus.OK or not isinstance(
+            response.parsed, ResponseCreditCardAccountsLimits
+        ):
+            return None
+
+        lines: list[dict[str, Any]] = response.parsed.to_dict().get("data", [])
+        total_line = next(
+            (
+                line
+                for line in lines
+                if line.get("creditLineLimitType") == "LIMITE_CREDITO_TOTAL"
+            ),
+            None,
+        )
+        if total_line is None:
+            return None
+
+        return (
+            self._extract_optional_amount(total_line, "availableAmount"),
+            self._extract_optional_amount(total_line, "limitAmount"),
+        )
 
     async def get_credit_card_bills(
         self, subject_id: str, credit_card_account_id: str
@@ -323,16 +752,26 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             List of open and past bills.
         """
         token = await self._get_token(subject_id)
-        response = await self._http.get(
-            f"{self._url_for('credit-cards-accounts')}/credit-cards-accounts/v2/"
-            f"accounts/{credit_card_account_id}/bills",
-            headers=build_fapi_headers(token),
+        client = self._credit_cards_client()
+        response = await cc_get_bills.asyncio_detailed(
+            credit_card_account_id, client=client, **build_fapi_call_kwargs(token)
         )
-        response.raise_for_status()
-        return [self._parse_bill(item) for item in response.json().get("data", [])]
+        parsed = self._require(
+            response, ResponseCreditCardAccountsBills, "listing credit card bills"
+        )
+        return [self._parse_bill(item) for item in parsed.to_dict().get("data", [])]
 
     async def list_pix_keys(self, subject_id: str, account_id: str) -> list[PixKey]:
         """Lists PIX keys for an account.
+
+        Proprietary, non-standard extension: the official Accounts
+        family spec (verified directly against
+        github.com/OpenBanking-Brasil/openapi, P1.1) has no
+        '/pix-keys' endpoint at all - no generated client exists for
+        it, so this remains a manual call. Kept only for the mock
+        environment: P0.9 already makes this raise outside
+        ``environment == 'mock'``, before this method is ever reached
+        against a real bank (see ``tools/pix.py``).
 
         Args:
             subject_id: User ID.
@@ -375,20 +814,23 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         is additionally signed as a JWS (auth/payment_jws.py) per the
         FAPI-BR message signing profile, which the Payments API
         requires on top of the bearer token and mTLS channel given its
-        transactional nature; this project sends the compact JWS as
-        the request body itself with ``Content-Type: application/jwt``,
-        a defensible default documented in payment_jws.py's module
-        docstring - some bank registrations may instead expect the
-        JWS as a header alongside a plain JSON body, so confirm against
-        the specific institution's OpenAPI spec before relying on this
-        against a live sandbox (see IMPLEMENTATION_PLAN.md, P3). The
-        response body is also a JWS (per the official spec, not plain
-        JSON - a real ``response.json()`` call here would fail against
-        a live bank), decoded via
-        ``decode_payment_response_unverified``; verifying its signature
-        against the bank's JWKS is deliberately deferred (this adapter
-        has no DirectoryClient reference to fetch it) - tracked as a
-        P3 follow-up.
+        transactional nature. Sent manually via ``self._http`` rather
+        than a generated client: ``openapi-python-client`` cannot
+        generate typed methods for ``application/jwt`` request bodies
+        (see this module's docstring and ``clients/__init__.py``) -
+        this project sends the compact JWS as the request body itself
+        with ``Content-Type: application/jwt``, a defensible default
+        documented in payment_jws.py's module docstring; some bank
+        registrations may instead expect the JWS as a header alongside
+        a plain JSON body, so confirm against the specific
+        institution's OpenAPI spec before relying on this against a
+        live sandbox (see IMPLEMENTATION_PLAN.md, P3). The response
+        body is also a JWS (per the official spec, not plain JSON - a
+        real ``response.json()`` call here would fail against a live
+        bank), decoded via ``decode_payment_response_unverified``;
+        verifying its signature against the bank's JWKS is
+        deliberately deferred (this adapter has no DirectoryClient
+        reference to fetch it) - tracked as a P3 follow-up.
 
         Args:
             subject_id: ID of the paying user.
@@ -448,6 +890,17 @@ class DefaultOpenFinanceAdapter(BankAdapter):
     async def list_investments(self, subject_id: str) -> InvestmentList:
         """Lists fixed-income investments.
 
+        The product-list endpoint only identifies each investment
+        (brand, type, ID) - the real spec (confirmed against the
+        generated ``ResponseBankFixedIncomesProductListDataItem``
+        model, see this module's docstring) never inlines balance or
+        rate data there, unlike this method's pre-P1.1 assumption.
+        Gross/net amounts and rate/indexer are fetched per-investment
+        (balances + product-identification, concurrently) and merged
+        in before parsing. An investment whose detail fetch fails is
+        logged and dropped from the result rather than failing the
+        whole listing.
+
         Args:
             subject_id: User ID.
 
@@ -455,16 +908,109 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             List of CDBs and other fixed-income products.
         """
         token = await self._get_token(subject_id)
-        response = await self._http.get(
-            f"{self._url_for('bank-fixed-incomes')}/bank-fixed-incomes/v1/investments",
-            headers=build_fapi_headers(token),
+        client = self._bank_fixed_incomes_client()
+        response = await bfi_get_investments.asyncio_detailed(
+            client=client, **build_fapi_call_kwargs(token)
         )
-        response.raise_for_status()
-        data = response.json().get("data", [])
+        parsed = self._require(
+            response, ResponseBankFixedIncomesProductList, "listing investments"
+        )
+        raw_items: list[dict[str, Any]] = parsed.to_dict().get("data", [])
+
+        details = await asyncio.gather(
+            *(
+                self._fetch_investment_detail(client, token, item["investmentId"])
+                for item in raw_items
+            ),
+            return_exceptions=True,
+        )
+        merged: list[dict[str, Any]] = []
+        for item, detail in zip(raw_items, details, strict=True):
+            if isinstance(detail, BaseException):
+                log.warning(
+                    "investment_detail_fetch_failed",
+                    bank_id=self.bank_id,
+                    investment_id=item.get("investmentId"),
+                    error=str(detail),
+                )
+                continue
+            merged.append({**item, **detail})
+
         return InvestmentList(
-            data=[self._parse_investment(item) for item in data],
-            total_records=len(data),
+            data=[self._parse_investment(item) for item in merged],
+            total_records=len(merged),
         )
+
+    async def _fetch_investment_detail(
+        self, client: BankFixedIncomesAuthClient, token: str, investment_id: str
+    ) -> dict[str, Any]:
+        """Fetches and flattens one investment's balance + identification.
+
+        Args:
+            client: Generated Bank Fixed Incomes client.
+            token: Access token for these calls.
+            investment_id: ID of the investment.
+
+        Returns:
+            Flat dict with the legacy-shaped keys ``_parse_investment``
+            expects ('grossAmount', 'netAmount', 'indexer',
+            'contractedRate', 'issueUnitPrice', 'issueDate', 'dueDate',
+            'gracePeriodDate') - whichever of the two calls succeeded;
+            a failed call simply omits its keys rather than raising,
+            so a bank missing one of the two still contributes partial
+            data instead of dropping the investment entirely.
+        """
+        balances_response, identification_response = await asyncio.gather(
+            bfi_get_balances.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+            bfi_get_product_identification.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+        )
+
+        detail: dict[str, Any] = {}
+
+        if int(balances_response.status_code) == HTTPStatus.OK and isinstance(
+            balances_response.parsed, ResponseBankFixedIncomesBalances
+        ):
+            balances = balances_response.parsed.to_dict().get("data", {})
+            detail["grossAmount"] = self._extract_amount(balances, "grossAmount")
+            detail["netAmount"] = self._extract_amount(balances, "netAmount")
+        else:
+            log.warning(
+                "investment_balances_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(balances_response.status_code),
+            )
+
+        is_ok = int(identification_response.status_code) == HTTPStatus.OK
+        if is_ok and isinstance(
+            identification_response.parsed,
+            ResponseBankFixedIncomesProductIdentification,
+        ):
+            identification = identification_response.parsed.to_dict().get("data", {})
+            remuneration = identification.get("remuneration", {})
+            detail["indexer"] = remuneration.get("indexer")
+            detail["contractedRate"] = remuneration.get(
+                "preFixedRate"
+            ) or remuneration.get("postFixedIndexerPercentage")
+            detail["issueUnitPrice"] = self._extract_optional_amount(
+                identification, "issueUnitPrice"
+            )
+            detail["issueDate"] = identification.get("issueDate")
+            detail["dueDate"] = identification.get("dueDate")
+            detail["gracePeriodDate"] = identification.get("gracePeriodDate")
+        else:
+            log.warning(
+                "investment_identification_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(identification_response.status_code),
+            )
+
+        return detail
 
     # Parsing helpers (private)
     @staticmethod
@@ -499,7 +1045,16 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         Returns:
             Validated Transaction instance.
         """
-        tx_date_raw = raw.get("transactionDate", raw.get("bookingDate", ""))
+        # The real field is 'transactionDateTime' (a full datetime
+        # string) - 'transactionDate'/'bookingDate' don't exist on the
+        # real AccountTransactionsData schema at all (confirmed against
+        # the generated model, see this module's docstring); kept as
+        # fallbacks only in case a given bank's response also happens
+        # to carry one of those non-standard keys.
+        tx_date_raw = raw.get(
+            "transactionDateTime",
+            raw.get("transactionDate", raw.get("bookingDate", "")),
+        )
         try:
             tx_date = dt_date.fromisoformat(tx_date_raw[:10])
         except ValueError:
@@ -508,12 +1063,12 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         return Transaction(
             transaction_id=raw.get("transactionId", ""),
             completed_authorised_payment_type=PaymentType(
-                raw.get("completedAuthorisedPaymentType", "DEBITO")
+                raw.get("completedAuthorisedPaymentType", "TRANSACAO_EFETIVADA")
             ),
             credit_debit_type=CreditDebitType(raw.get("creditDebitType", "DEBITO")),
             transaction_name=raw.get("transactionName", ""),
             type=TransactionType(raw.get("type", "OUTROS")),
-            amount=raw.get("amount", "0"),
+            amount=DefaultOpenFinanceAdapter._extract_amount(raw, "transactionAmount"),
             transaction_date=tx_date,
             counterpart_name=raw.get("counterpartName"),
         )
@@ -523,7 +1078,11 @@ class DefaultOpenFinanceAdapter(BankAdapter):
 
         Not a staticmethod (unlike the other parsers here): its
         fallback defaults need ``self.bank_id`` rather than a
-        hardcoded institution name.
+        hardcoded institution name. ``availableCreditLimit``/
+        ``totalCreditLimit`` are populated by the caller
+        (``get_credit_card_accounts``) from a separate '/limits' call,
+        not present on this raw dict as returned by the real accounts
+        list endpoint itself.
 
         Args:
             raw: Raw dictionary from the API.
@@ -555,8 +1114,12 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         return Bill(
             bill_id=raw.get("billId", ""),
             due_date=dt_date.fromisoformat(raw["dueDate"][:10]),
-            bill_total_amount=raw.get("billTotalAmount", "0"),
-            bill_minimum_amount=raw.get("billMinimumAmount", "0"),
+            bill_total_amount=DefaultOpenFinanceAdapter._extract_amount(
+                raw, "billTotalAmount"
+            ),
+            bill_minimum_amount=DefaultOpenFinanceAdapter._extract_amount(
+                raw, "billMinimumAmount"
+            ),
         )
 
     def _parse_investment(self, raw: dict[str, Any]) -> BankFixedIncome:
@@ -565,17 +1128,29 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         Not a staticmethod, for the same reason as _parse_credit_card.
 
         Args:
-            raw: Raw dictionary from the API.
+            raw: Raw dictionary from the API - the merged shape built
+                by ``list_investments``/``_fetch_investment_detail``.
 
         Returns:
             BankFixedIncome instance.
         """
+        issue_date = raw.get("issueDate")
+        due_date = raw.get("dueDate")
+        grace_period_date = raw.get("gracePeriodDate")
         return BankFixedIncome(
             investment_id=raw.get("investmentId", ""),
             brand_name=raw.get("brandName", self.bank_id),
             investment_type=InvestmentType(raw.get("investmentType", "CDB")),
-            gross_amount=raw.get("grossAmount", "0"),
-            net_amount=raw.get("netAmount", "0"),
+            gross_amount=self._extract_amount(raw, "grossAmount"),
+            net_amount=self._extract_amount(raw, "netAmount"),
             indexer=raw.get("indexer"),
             contracted_rate=raw.get("contractedRate"),
+            issue_unit_price=self._extract_optional_amount(raw, "issueUnitPrice"),
+            issue_date=dt_date.fromisoformat(issue_date[:10]) if issue_date else None,
+            due_date=dt_date.fromisoformat(due_date[:10]) if due_date else None,
+            grace_period_date=(
+                dt_date.fromisoformat(grace_period_date[:10])
+                if grace_period_date
+                else None
+            ),
         )

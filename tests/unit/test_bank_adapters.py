@@ -33,6 +33,7 @@ from openfinance_br_mcp.adapters.picpay import _PICPAY_BASE, PicPayAdapter
 from openfinance_br_mcp.adapters.santander import _SANTANDER_BASE, SantanderAdapter
 from openfinance_br_mcp.adapters.sicoob import _SICOOB_BASE, SicoobAdapter
 from openfinance_br_mcp.adapters.xp import _XP_BASE, XPAdapter
+from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
 from openfinance_br_mcp.auth.token import TokenResponse, TokenStore
 from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.exceptions import BankAdapterError
@@ -40,6 +41,16 @@ from openfinance_br_mcp.schemas.pix import PixKeyType, PixPaymentRequest
 from openfinance_br_mcp.schemas.transaction import TransactionFilters
 
 SUBJECT_ID = "12345678900"
+
+# Every generated model's 'links'/'meta' envelope is required and
+# strict about its own required fields (Links.self, Meta.totalRecords/
+# totalPages/requestDateTime - see clients/<family>/models/{links,meta}.py) -
+# unlike this file's pre-P1.1 fixtures, which only supplied the 'data'
+# payload and relied on this project's own lenient .get(key, default)
+# parsing. Reused across every family below; all four generated
+# families' Links/Meta shapes are identical in practice.
+_LINKS = {"self": "https://example.com/resource"}
+_META = {"totalRecords": 1, "totalPages": 1, "requestDateTime": "2026-01-01T00:00:00Z"}
 
 
 @pytest.fixture(autouse=True)
@@ -143,9 +154,14 @@ async def test_get_accounts_parses_response(
                         "accountId": "acc-1",
                         "number": "12345-6",
                         "checkDigit": "6",
+                        "brandName": "Test Bank",
+                        "companyCnpj": "11222333000181",
+                        "type": "CONTA_DEPOSITO_A_VISTA",
+                        "compeCode": "001",
                     }
                 ],
-                "meta": {"totalRecords": 1, "totalPages": 1},
+                "links": _LINKS,
+                "meta": _META,
             },
         )
     )
@@ -167,7 +183,15 @@ async def test_get_accounts_http_error_names_the_correct_bank(
     Sicoob/Caixa inherited NubankAdapter directly and every error
     message hardcoded 'Nubank', regardless of which bank actually
     failed."""
-    respx.get(f"{base_url}/accounts/v2/accounts").mock(return_value=httpx.Response(500))
+    # A body is required even for the error case: the generated
+    # client's _parse_response always JSON-decodes non-200 bodies too
+    # (unlike the old raise_for_status()-only path, which never parsed
+    # the body at all) - an empty 500 response would raise
+    # JSONDecodeError instead of the BankAdapterError this test expects
+    # (confirmed by testing).
+    respx.get(f"{base_url}/accounts/v2/accounts").mock(
+        return_value=httpx.Response(500, json={"errors": []})
+    )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
 
     with pytest.raises(BankAdapterError, match=expected_bank_id) as exc_info:
@@ -187,10 +211,16 @@ async def test_get_balance_parses_response(
             200,
             json={
                 "data": {
-                    "availableAmount": "100.00",
-                    "blockedAmount": "0.00",
-                    "automaticallyInvestedAmount": "0.00",
-                }
+                    "availableAmount": {"amount": "100.00", "currency": "BRL"},
+                    "blockedAmount": {"amount": "0.00", "currency": "BRL"},
+                    "automaticallyInvestedAmount": {
+                        "amount": "0.00",
+                        "currency": "BRL",
+                    },
+                    "updateDateTime": "2026-01-01T00:00:00Z",
+                },
+                "links": _LINKS,
+                "meta": _META,
             },
         )
     )
@@ -208,7 +238,7 @@ async def test_get_balance_http_error_names_the_correct_bank(
     adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
 ) -> None:
     respx.get(f"{base_url}/accounts/v2/accounts/acc-1/balances").mock(
-        return_value=httpx.Response(500)
+        return_value=httpx.Response(500, json={"errors": []})
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
 
@@ -232,11 +262,15 @@ async def test_list_transactions_parses_response(
                     {
                         "transactionId": "tx-1",
                         "transactionName": "COMPRA",
-                        "amount": "10.00",
-                        "transactionDate": "2026-01-01",
+                        "transactionAmount": {"amount": "10.00", "currency": "BRL"},
+                        "transactionDateTime": "2026-01-01T00:00:00Z",
+                        "completedAuthorisedPaymentType": "TRANSACAO_EFETIVADA",
+                        "creditDebitType": "DEBITO",
+                        "type": "PIX",
                     }
                 ],
-                "meta": {"totalRecords": 1, "totalPages": 1},
+                "links": _LINKS,
+                "meta": _META,
             },
         )
     )
@@ -257,7 +291,7 @@ async def test_list_transactions_http_error_names_the_correct_bank(
     adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
 ) -> None:
     respx.get(f"{base_url}/accounts/v2/accounts/acc-1/transactions").mock(
-        return_value=httpx.Response(500)
+        return_value=httpx.Response(500, json={"errors": []})
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
 
@@ -277,7 +311,30 @@ async def test_get_credit_card_accounts_parses_response(
 ) -> None:
     respx.get(f"{base_url}/credit-cards-accounts/v2/accounts").mock(
         return_value=httpx.Response(
-            200, json={"data": [{"creditCardAccountId": "cc-1"}]}
+            200,
+            json={
+                "data": [
+                    {
+                        "creditCardAccountId": "cc-1",
+                        "brandName": "Test Bank",
+                        "companyCnpj": "11222333000181",
+                        "name": "Test Card",
+                        "productType": "OUTROS",
+                        "creditCardNetwork": "MASTERCARD",
+                    }
+                ],
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    # get_credit_card_accounts also fetches per-card limits (P1.1 fix -
+    # the real accounts list never inlines availableCreditLimit/
+    # totalCreditLimit, see default_adapter.py) - an empty limits list
+    # is a valid response and simply leaves this card's limits unset.
+    respx.get(f"{base_url}/credit-cards-accounts/v2/accounts/cc-1/limits").mock(
+        return_value=httpx.Response(
+            200, json={"data": [], "links": _LINKS, "meta": _META}
         )
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
@@ -285,7 +342,13 @@ async def test_get_credit_card_accounts_parses_response(
     cards = await adapter.get_credit_card_accounts(SUBJECT_ID)
 
     assert cards[0].credit_card_account_id == "cc-1"
-    assert cards[0].brand_name == expected_bank_id
+    # brandName is a required field on the real API (see
+    # CreditCardAccountsData) - the fallback-to-bank_id default is
+    # covered separately by
+    # test_credit_card_default_brand_name_is_bank_specific, which
+    # exercises _parse_credit_card directly with a raw dict missing
+    # it, since a real bank's response can never omit it.
+    assert cards[0].brand_name == "Test Bank"
 
 
 @pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)
@@ -302,10 +365,14 @@ async def test_get_credit_card_bills_parses_response(
                     {
                         "billId": "bill-1",
                         "dueDate": "2026-02-10",
-                        "billTotalAmount": "500.00",
-                        "billMinimumAmount": "50.00",
+                        "billTotalAmount": {"amount": "500.00", "currency": "BRL"},
+                        "billMinimumAmount": {"amount": "50.00", "currency": "BRL"},
+                        "isInstalment": False,
+                        "payments": [],
                     }
-                ]
+                ],
+                "links": _LINKS,
+                "meta": _META,
             },
         )
     )
@@ -341,9 +408,19 @@ async def test_list_pix_keys_parses_response(
 async def test_initiate_pix_parses_response(
     adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
 ) -> None:
+    # The response body is a compact JWS, not plain JSON (P2 - see
+    # initiate_pix's docstring): plain JSON here would make
+    # decode_payment_response_unverified raise AuthenticationError
+    # ('Token format unrecognized'), confirmed by testing. Signed with
+    # the same sign_payment_payload() production code uses, under the
+    # test RSA key the _configure_private_key autouse fixture (above)
+    # already points settings.private_key_path at.
     respx.post(f"{base_url}/payments/v4/pix/payments").mock(
         return_value=httpx.Response(
-            201, json={"data": {"paymentId": "pay-1", "status": "ACSC"}}
+            201,
+            content=sign_payment_payload(
+                {"data": {"paymentId": "pay-1", "status": "ACSC"}}
+            ),
         )
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
@@ -370,9 +447,14 @@ async def test_initiate_pix_sends_signed_jws_with_payment_purpose_token(
     (auth/payment_jws.py) rather than sending plain JSON - both required
     by the FAPI-BR Payments API profile (see P2 of the implementation
     plan)."""
+    # See test_initiate_pix_parses_response above for why the response
+    # must be a signed JWS, not plain JSON.
     route = respx.post(f"{_NUBANK_BASE}/payments/v4/pix/payments").mock(
         return_value=httpx.Response(
-            201, json={"data": {"paymentId": "pay-1", "status": "ACSC"}}
+            201,
+            content=sign_payment_payload(
+                {"data": {"paymentId": "pay-1", "status": "ACSC"}}
+            ),
         )
     )
     adapter = NubankAdapter(token_store, httpx.AsyncClient())
@@ -430,7 +512,73 @@ async def test_list_investments_parses_response(
     adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
 ) -> None:
     respx.get(f"{base_url}/bank-fixed-incomes/v1/investments").mock(
-        return_value=httpx.Response(200, json={"data": [{"investmentId": "inv-1"}]})
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "investmentId": "inv-1",
+                        "brandName": "Test Bank",
+                        "companyCnpj": "11222333000181",
+                        "investmentType": "CDB",
+                    }
+                ],
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    # list_investments also fetches per-investment balances +
+    # product-identification, concurrently (P1.1 fix - the real
+    # product-list endpoint never inlines gross/net amounts or rate
+    # data, see default_adapter.py) - both must be mocked or the whole
+    # investment is dropped from the result (a detail-fetch failure
+    # degrades gracefully rather than crashing, see
+    # _fetch_investment_detail).
+    respx.get(f"{base_url}/bank-fixed-incomes/v1/investments/inv-1/balances").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "referenceDateTime": "2026-01-01T00:00:00Z",
+                    "quantity": "1.0000",
+                    "updatedUnitPrice": {"amount": "1000.00", "currency": "BRL"},
+                    "grossAmount": {"amount": "1000.00", "currency": "BRL"},
+                    "netAmount": {"amount": "950.00", "currency": "BRL"},
+                    "incomeTax": {"amount": "50.00", "currency": "BRL"},
+                    "financialTransactionTax": {"amount": "0.00", "currency": "BRL"},
+                    "blockedBalance": {"amount": "0.00", "currency": "BRL"},
+                    "purchaseUnitPrice": {"amount": "1000.00", "currency": "BRL"},
+                },
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/bank-fixed-incomes/v1/investments/inv-1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "issuerInstitutionCnpjNumber": "11222333000181",
+                    "investmentType": "CDB",
+                    "remuneration": {
+                        "rateType": "LINEAR",
+                        "ratePeriodicity": "MENSAL",
+                        "calculation": "DIAS_CORRIDOS",
+                        "indexer": "CDI",
+                        "postFixedIndexerPercentage": "1.000000",
+                    },
+                    "issueUnitPrice": {"amount": "1000.00", "currency": "BRL"},
+                    "dueDate": "2027-01-01",
+                    "issueDate": "2026-01-01",
+                    "purchaseDate": "2026-01-01",
+                    "gracePeriodDate": "2026-01-01",
+                },
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
 
@@ -438,7 +586,11 @@ async def test_list_investments_parses_response(
 
     assert result.total_records == 1
     assert result.data[0].investment_id == "inv-1"
-    assert result.data[0].brand_name == expected_bank_id
+    # brandName is required on the real API - see
+    # test_get_credit_card_accounts_parses_response's identical note.
+    assert result.data[0].brand_name == "Test Bank"
+    assert result.data[0].gross_amount == Decimal("1000.00")
+    assert result.data[0].net_amount == Decimal("950.00")
 
 
 @pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)
@@ -490,7 +642,9 @@ async def test_bank_http_calls_never_use_an_mcp_client_token(
         ),
     )
     route = respx.get(f"{base_url}/accounts/v2/accounts").mock(
-        return_value=httpx.Response(200, json={"data": [], "meta": {}})
+        return_value=httpx.Response(
+            200, json={"data": [], "links": _LINKS, "meta": _META}
+        )
     )
     adapter = adapter_cls(store, httpx.AsyncClient())
 
