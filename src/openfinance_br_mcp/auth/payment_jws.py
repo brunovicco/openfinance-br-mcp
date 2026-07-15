@@ -66,6 +66,45 @@ def sign_payment_payload(payload: dict[str, Any]) -> str:
     return str(token.serialize())
 
 
+def decode_payment_response_unverified(signed_response: str) -> dict[str, Any]:
+    """Decodes a compact-JWS payment response WITHOUT verifying its signature.
+
+    Every Payments API response body that carries payment/consent data
+    (``POST /consents``, ``GET /consents/{id}``, ``POST /pix/payments``,
+    ``GET /pix/payments/{id}``) is itself a JWS (``Content-Type:
+    application/jwt``), not plain JSON - calling ``response.json()``
+    directly against one of these raises a JSON decode error, it does
+    not silently succeed. Full verification requires the bank's JWKS
+    (``DirectoryClient.resolve_jwks``), which isn't threaded through to
+    every call site that needs the payload yet (adapters/default_adapter.py
+    and auth/payment_consent.py construct their HTTP clients without a
+    DirectoryClient reference) - tracked as an ``IMPLEMENTATION_PLAN.md``
+    P3 follow-up alongside sandbox validation. Prefer
+    ``verify_payment_response`` over this function wherever a ``jwks``
+    reference is available.
+
+    Args:
+        signed_response: Compact JWS string returned by the bank.
+
+    Returns:
+        The decoded (**unverified**) claims payload.
+
+    Raises:
+        AuthenticationError: If the response isn't a well-formed JWS.
+    """
+    try:
+        parsed = jwcrypto_jwt.JWT(jwt=signed_response)
+        payload = parsed.token.objects["payload"]
+    except Exception as exc:
+        raise AuthenticationError(
+            f"Payment response is not a well-formed JWS: {exc}",
+            code="PAYMENT_RESPONSE_MALFORMED",
+        ) from exc
+
+    result: dict[str, Any] = json.loads(payload)
+    return result
+
+
 def verify_payment_response(
     signed_response: str, *, jwks: dict[str, Any]
 ) -> dict[str, Any]:

@@ -36,6 +36,10 @@ htmlcov/
 .vscode/*
 !.vscode/settings.json
 *.swp
+.claude/settings.local.json
+
+# Scratch: local clone of OpenBanking-Brasil/openapi for spec inspection (P1.1)
+openapi-spec-tmp/
 
 # OS
 .DS_Store

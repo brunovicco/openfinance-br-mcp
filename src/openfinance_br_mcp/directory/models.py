@@ -42,8 +42,12 @@ class ApiResource(BaseModel):
     Attributes:
         ApiResourceId: Directory-internal identifier for this resource entry.
         ApiVersion: Semantic version of the certified API (e.g. '2.5.0').
-        ApiFamilyType: API family slug (e.g. 'accounts', 'payments-consents',
-            'consents', 'resources', 'payments-pix').
+        ApiFamilyType: API family slug (e.g. 'accounts', 'payments',
+            'consents', 'resources', 'credit-cards-accounts'). 'payments'
+            covers both payment consents and PIX initiation - there is no
+            separate 'payments-consents'/'payments-pix' family in the
+            real Directory of Participants registry (verified directly
+            against github.com/OpenBanking-Brasil/openapi).
         Status: 'Active' when the API is live and usable (verified
             against a live directory fetch); other values indicate it
             should not be resolved.

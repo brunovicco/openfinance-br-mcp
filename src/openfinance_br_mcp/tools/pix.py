@@ -160,7 +160,7 @@ async def initiate_pix(
         raise ValidationError(f"Bank '{bank}' is not available.", code="UNKNOWN_BANK")
 
     if app.directory is not None:
-        resolved = await app.directory.resolve(bank, "payments-consents")
+        resolved = await app.directory.resolve(bank, "payments")
         token_endpoint = await app.directory.resolve_token_endpoint(bank)
         try:
             payment_token = await app.token_store.get_valid_token(

@@ -19,13 +19,20 @@ The sequence is:
      (``PaymentConsentManager.get_status``) before creating the actual
      payment.
 
-Endpoint paths/payload shapes below follow the Payments API v5.0.0
-OpenAPI spec as best understood at implementation time - this has NOT
-been validated against a live BCB sandbox (tracked as
-``IMPLEMENTATION_PLAN.md`` P3). Re-verify field names/required
-properties against the current spec
-(github.com/OpenBanking-Brasil/openapi/swagger-apis/payments) before
-relying on this against a real institution.
+Endpoint paths/payload shapes below follow the Payments API v4.0.0
+OpenAPI spec (github.com/OpenBanking-Brasil/openapi/swagger-apis/payments/4.0.0.yml -
+verified directly against the spec; v5.0.0 does not exist, an earlier
+implementation note in this module was wrong about that). Payment
+consent is part of the ``payments`` family itself in the Directory of
+Participants - there is no separate ``payments-consents``
+``ApiFamilyType`` (an earlier version of this code queried the
+Directory for that nonexistent family, which would fail with
+``API_FAMILY_NOT_FOUND`` against any real bank; see tools/payments.py
+and tools/pix.py, which resolve ``"payments"``). Both
+``POST /consents`` and ``GET /consents/{id}`` require/return
+``Content-Type: application/jwt`` (a signed JWS), not plain JSON - this
+has NOT been validated against a live BCB sandbox (tracked as
+``IMPLEMENTATION_PLAN.md`` P3).
 
 Example:
     >>> manager = PaymentConsentManager(http_client=client)
@@ -44,6 +51,10 @@ import httpx
 import structlog
 from pydantic import BaseModel, Field
 
+from openfinance_br_mcp.auth.payment_jws import (
+    decode_payment_response_unverified,
+    sign_payment_payload,
+)
 from openfinance_br_mcp.auth.store_protocol import InMemoryStore, KeyValueStore
 from openfinance_br_mcp.exceptions import ConsentDeniedError, ConsentError
 
@@ -214,14 +225,18 @@ class PaymentConsentManager:
             }
         }
 
+        signed_payload = sign_payment_payload(payload)
         try:
             response = await self._http.post(
-                f"{bank_base_url}/payments/v1/consents",
-                json=payload,
-                headers={"Authorization": f"Bearer {access_token}"},
+                f"{bank_base_url}/payments/v4/consents",
+                content=signed_payload,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/jwt",
+                },
             )
             response.raise_for_status()
-            data = response.json()
+            data = decode_payment_response_unverified(response.text)
         except httpx.HTTPStatusError as exc:
             raise ConsentError(
                 f"Failed to create payment consent: HTTP {exc.response.status_code}",
@@ -272,11 +287,11 @@ class PaymentConsentManager:
         consent_id = cached["data"]["consentId"]
         try:
             response = await self._http.get(
-                f"{bank_base_url}/payments/v1/consents/{consent_id}",
+                f"{bank_base_url}/payments/v4/consents/{consent_id}",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             response.raise_for_status()
-            data = response.json()
+            data = decode_payment_response_unverified(response.text)
         except httpx.HTTPStatusError as exc:
             raise ConsentError(
                 f"Error querying payment consent: HTTP {exc.response.status_code}",

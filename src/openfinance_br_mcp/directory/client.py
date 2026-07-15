@@ -184,7 +184,10 @@ class DirectoryClient:
         Args:
             bank_id: Identifier used by this project's adapters (e.g. 'nubank').
             api_family_type: Directory ApiFamilyType to resolve (e.g.
-                'accounts', 'consents', 'payments-consents', 'payments-pix').
+                'accounts', 'consents', 'payments' - payment consents and
+                PIX initiation are both under the single 'payments'
+                family, there is no separate 'payments-consents'/
+                'payments-pix' family).
 
         Returns:
             ResolvedApi with the base URL and issuer to use.

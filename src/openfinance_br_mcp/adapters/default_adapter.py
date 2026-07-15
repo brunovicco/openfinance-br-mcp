@@ -26,7 +26,10 @@ import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from openfinance_br_mcp.adapters.base import BankAdapter, build_fapi_headers
-from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
+from openfinance_br_mcp.auth.payment_jws import (
+    decode_payment_response_unverified,
+    sign_payment_payload,
+)
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.exceptions import BankAdapterError
 from openfinance_br_mcp.schemas.account import (
@@ -378,10 +381,14 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         docstring - some bank registrations may instead expect the
         JWS as a header alongside a plain JSON body, so confirm against
         the specific institution's OpenAPI spec before relying on this
-        against a live sandbox (see IMPLEMENTATION_PLAN.md, P3).
-        Verifying the bank's signed response is deliberately deferred
-        (this adapter has no DirectoryClient reference to fetch the
-        bank's JWKS) - tracked as a P3 follow-up.
+        against a live sandbox (see IMPLEMENTATION_PLAN.md, P3). The
+        response body is also a JWS (per the official spec, not plain
+        JSON - a real ``response.json()`` call here would fail against
+        a live bank), decoded via
+        ``decode_payment_response_unverified``; verifying its signature
+        against the bank's JWKS is deliberately deferred (this adapter
+        has no DirectoryClient reference to fetch it) - tracked as a
+        P3 follow-up.
 
         Args:
             subject_id: ID of the paying user.
@@ -429,7 +436,7 @@ class DefaultOpenFinanceAdapter(BankAdapter):
                 status_code=exc.response.status_code,
             ) from exc
 
-        raw = response.json().get("data", {})
+        raw = decode_payment_response_unverified(response.text).get("data", {})
         return PixPayment(
             payment_id=raw["paymentId"],
             status=PixPaymentStatus(raw.get("status", "PDNG")),

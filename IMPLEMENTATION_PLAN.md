@@ -129,11 +129,24 @@ Convenção de fases: P0 bloqueia riscos imediatos; P1 exige P0 concluído; P2 e
 
 ### P1.1 Clientes gerados a partir dos OpenAPI oficiais
 
-- Criar `clients/` com um cliente por família+versão (`consents_v3_3_1`, `accounts_v2_5_0`, `credit_cards_v2_4_0`, `payments_v5_0_0`, `bank_fixed_incomes_v1_1_0`, `funds_v1_1_0`, `variable_incomes_v1_3_0`), gerados via `openapi-python-client` ou `datamodel-code-generator` a partir das specs publicados em `github.com/OpenBanking-Brasil/openapi`.
+**Nota (verificado ao vivo contra o repositório `github.com/OpenBanking-Brasil/openapi`, clonado localmente em `openapi-spec-tmp/` para inspeção - ver `swagger-apis/<família>/`):** as versões abaixo listadas na redação original desta seção (`consents_v3_3_1`, `accounts_v2_5_0`, `credit_cards_v2_4_0`, `payments_v5_0_0`) eram estimativas não verificadas feitas durante o planejamento inicial. As versões *estáveis* (não beta/rc) realmente publicadas hoje são:
+
+- `consents` 3.3.1 (confirmado - a estimativa original estava certa)
+- `accounts` 2.4.2 (2.5.0 só existe como `2.5.0-beta.1`/`2.5.0-beta.2` - ainda não estável)
+- `credit-cards` 2.3.1 (pasta do repo chama-se `credit-cards`, mas os `servers.url` do próprio spec confirmam o path `/open-banking/credit-cards-accounts/v2` já usado neste projeto; 2.4.0 só existe como beta)
+- `payments` **4.0.0**, não 5.0.0 - a versão 5.0.0 não existe neste repositório. **Além disso, o consentimento de pagamento (`POST/GET /consents`) está definido dentro do MESMO spec/família `payments`, não em uma família separada `payments-consents`** como este projeto assumiu em `auth/payment_consent.py`/`tools/payments.py` - não há nenhuma pasta `payments-consents` no repositório. O `requestBody` de `POST /consents` também exige `Content-Type: application/jwt` (JWS assinado), não JSON puro - hoje `payment_consent.py` envia JSON puro, o que precisa ser corrigido junto com a migração de família.
+- `bank-fixed-incomes` 1.1.0 (confirmado)
+- `funds` 1.1.0 (confirmado)
+- `variable-incomes` 1.3.0 (confirmado)
+- `treasure-titles` 1.1.0 (a pasta chama-se `treasure-titles`, não `treasury-direct`/"Tesouro Direto" como referido em P1.3 abaixo)
+
+Criar `clients/` com um cliente por família+versão gerado via `openapi-python-client` a partir desses specs (arquivo `.yml` exato de cada família/versão acima).
+
 - `default_adapter.py` deixa de montar URLs manualmente (`f"{self.base_url}/accounts/v2/accounts"`) e de fazer parsing com `dict.get()` genérico; passa a chamar os métodos tipados do cliente gerado correspondente.
 - Corrigir especificamente:
-  - path de cartão de crédito `/credit-cards/v2/accounts` → `/credit-cards-accounts/v2/accounts`; adicionar chamada separada para `/credit-cards-accounts/v2/accounts/{id}/limits` em vez de esperar `availableCreditLimit`/`totalCreditLimit` no objeto de conta.
+  - path de cartão de crédito `/credit-cards/v2/accounts` → `/credit-cards-accounts/v2/accounts` (já corrigido no P0/P1.2 anterior); adicionar chamada separada para `/credit-cards-accounts/v2/accounts/{id}/limits` em vez de esperar `availableCreditLimit`/`totalCreditLimit` no objeto de conta (confirmado: é endpoint próprio, `operationId: creditCardsGetAccountsCreditCardAccountIdLimits`).
   - remover `list_pix_keys` do escopo genérico Open Finance (não existe na família Contas oficial) ou documentar como extensão proprietária com adapter dedicado.
+  - migrar `auth/payment_consent.py`/`tools/payments.py` de `payments-consents` (família inexistente) para `payments` v4, endpoint `/consents` (mesmo host/versão de `/pix/payments`), e assinar o `requestBody` de criação do consentimento como JWS antes de enviar.
 
 ### P1.2 Diretório resolve por família de API, adapter recebe catálogo
 
@@ -145,8 +158,8 @@ Convenção de fases: P0 bloqueia riscos imediatos; P1 exige P0 concluído; P2 e
 
 ### P1.3 Versões atualizadas
 
-- Atualizar paths para as versões vigentes (FAPI-BR 2.2.1, Consentimentos 3.3.1, Contas 2.5.0, Cartão de Crédito 2.4.0, Pagamentos 5.0.0, Renda Fixa 1.1.0) conforme os clientes gerados em P1.1 forem substituindo as chamadas manuais.
-- Implementar adapters para Fundos (1.1.0), Renda Variável (1.3.0) e Tesouro Direto (1.1.0), hoje declarados no consentimento mas sem implementação (`investments.py` só cobre `bank-fixed-incomes`).
+- Atualizar paths para as versões estáveis vigentes (ver nota de P1.1 acima): Consentimentos 3.3.1, Contas 2.4.2, Cartão de Crédito 2.3.1 (path `credit-cards-accounts` v2), Pagamentos 4.0.0, Renda Fixa Bancária (`bank-fixed-incomes`) 1.1.0, conforme os clientes gerados em P1.1 forem substituindo as chamadas manuais.
+- Implementar adapters para Fundos (`funds` 1.1.0), Renda Variável (`variable-incomes` 1.3.0) e Títulos do Tesouro (`treasure-titles` 1.1.0 - nome real da família no repositório oficial, referida anteriormente aqui como "Tesouro Direto"), hoje declarados no consentimento mas sem implementação (`investments.py` só cobre `bank-fixed-incomes`).
 
 ---
 
@@ -171,6 +184,13 @@ Convenção de fases: P0 bloqueia riscos imediatos; P1 exige P0 concluído; P2 e
 - Regra: mesma chave + mesmo hash de payload → retorna resultado anterior; mesma chave + payload diferente → rejeita; emissor incompatível → rejeita.
 
 **Critério de aceite (P2 geral):** suíte de testes contra um mock da API de Pagamentos v5 cobrindo o fluxo feliz completo, idempotência (replay idêntico, replay com payload diferente, replay de outro cliente) e cancelamento.
+
+**Nota (verificado ao vivo contra o repositório oficial, sessão P1.1):** a implementação original do P2 continha dois bugs reais descobertos só ao inspecionar `swagger-apis/payments/4.0.0.yml` diretamente (não uma nota de plano, um bug em código já commitado):
+
+1. `auth/payment_consent.py` chamava `POST {base}/payments/v1/consents` - o path correto é `/payments/v4/consents` (não existe `payments/v5`, e a família de consentimento de pagamento é a própria família `payments`, não uma família separada `payments-consents`/`payments-pix` no Diretório de Participantes - `tools/payments.py` e `tools/pix.py` resolviam essa família inexistente via `app.directory.resolve(bank, "payments-consents")`, o que falharia com `API_FAMILY_NOT_FOUND` contra qualquer banco real).
+2. Tanto `POST /consents` quanto `GET /consents/{id}` (e também `POST /pix/payments`/`GET /pix/payments/{id}`, já usados por `initiate_pix`) exigem/retornam `Content-Type: application/jwt` nos dois sentidos - request **e** response são JWS assinado, não JSON puro. O código chamava `response.json()` diretamente nesses quatro pontos, o que levantaria erro de parse contra qualquer banco real (não um "talvez funcione sem verificação", um crash garantido).
+
+Corrigido nesta sessão: os quatro call sites (`default_adapter.py::initiate_pix`, `payment_consent.py::create`/`get_status`) agora assinam o corpo da requisição via `sign_payment_payload` e decodificam a resposta via `decode_payment_response_unverified` (novo em `auth/payment_jws.py`) - decodifica o JWS sem verificar a assinatura do banco, já que nenhum desses call sites tem acesso a um `DirectoryClient` para buscar o JWKS do banco; verificação completa continua rastreada como item de P3, no mesmo espírito do que já estava documentado para a resposta de `initiate_pix`.
 
 ---
 

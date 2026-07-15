@@ -77,6 +77,14 @@ validation (P3) is tracked separately.
   channel. Verifying the bank's signed response is implemented
   (`verify_payment_response`) but not yet wired into the adapter - tracked
   for P3.
+- **`decode_payment_response_unverified`** (`auth/payment_jws.py`): every Payments API
+  response body that carries payment/consent data is itself a JWS
+  (`Content-Type: application/jwt`), not plain JSON - verified directly
+  against the official spec. Decodes the claims without verifying the
+  signature (no `DirectoryClient` reference is available at these call
+  sites to fetch the bank's JWKS yet; full verification remains a P3
+  follow-up, same as already noted for `initiate_pix`'s response).
+
 - **Persistent, cross-replica PIX idempotency** (`auth/idempotency_store.py`):
   replaces the previous in-process `pix_idempotency_cache` dict, which
   never survived a restart and wasn't shared across Kubernetes replicas.
@@ -85,6 +93,25 @@ validation (P3) is tracked separately.
   but a replay with a *different* payload under the same key now correctly
   raises a conflict error instead of silently returning the wrong cached
   result.
+
+### Fixed (payment consent correctness, found while generating P1.1's typed clients)
+
+- **Wrong Directory API family for payment consent**: `tools/payments.py`
+  and `tools/pix.py` resolved a `"payments-consents"` family via
+  `DirectoryClient.resolve()` - this family doesn't exist in the real
+  Directory of Participants registry. Payment consent (`POST /consents`)
+  is part of the `payments` family itself; the old code would fail with
+  `API_FAMILY_NOT_FOUND` against any real bank. Now resolves `"payments"`.
+- **Wrong payment consent endpoint path/version**: `auth/payment_consent.py`
+  called `POST/GET {base}/payments/v1/consents` - the officially
+  published path is `/payments/v4/consents` (`payments/v5` doesn't exist).
+- **Payment consent request/response were treated as plain JSON**: per
+  the official spec, `POST /consents` and `GET /consents/{id}` require
+  the request body to be signed and returned as a JWS
+  (`Content-Type: application/jwt`) in both directions - the old code
+  sent a plain JSON body and called `response.json()` directly, which
+  would fail immediately against any real bank. Both directions are now
+  signed/decoded via `auth/payment_jws.py`.
 
 ### Changed
 

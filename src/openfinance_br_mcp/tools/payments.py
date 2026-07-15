@@ -144,7 +144,7 @@ async def start_payment_consent(
     _require_directory(app)
     assert app.directory is not None  # narrowed by _require_directory
 
-    resolved = await app.directory.resolve(bank, "payments-consents")
+    resolved = await app.directory.resolve(bank, "payments")
     if resolved.issuer is None:
         raise ConsentError(
             f"No OAuth2/OIDC issuer resolved for bank '{bank}'",
@@ -317,7 +317,7 @@ async def check_payment_consent_status(
     _require_directory(app)
     assert app.directory is not None
 
-    resolved = await app.directory.resolve(bank, "payments-consents")
+    resolved = await app.directory.resolve(bank, "payments")
     token_endpoint = await app.directory.resolve_token_endpoint(bank)
     try:
         token = await app.token_store.get_valid_token(

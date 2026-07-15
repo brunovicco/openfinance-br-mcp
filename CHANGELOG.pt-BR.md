@@ -84,6 +84,15 @@ separadamente.
   do bearer token e do canal mTLS. A verificação da resposta assinada pelo
   banco está implementada (`verify_payment_response`) mas ainda não está
   conectada ao adapter - rastreado para a P3.
+- **`decode_payment_response_unverified`** (`auth/payment_jws.py`): toda
+  resposta da API de Pagamentos que carrega dados de pagamento/consentimento
+  é ela mesma um JWS (`Content-Type: application/jwt`), não JSON puro -
+  verificado diretamente contra o spec oficial. Decodifica as claims sem
+  verificar a assinatura (nenhum desses call sites tem acesso a um
+  `DirectoryClient` para buscar o JWKS do banco ainda; a verificação
+  completa continua como item de P3, no mesmo espírito já documentado
+  para a resposta de `initiate_pix`).
+
 - **Idempotência persistente e entre réplicas para o PIX**
   (`auth/idempotency_store.py`): substitui o antigo dict em processo
   `pix_idempotency_cache`, que nunca sobrevivia a um reinício e não era
@@ -93,6 +102,28 @@ separadamente.
   payload *diferente* sob a mesma chave agora corretamente gera um erro de
   conflito, em vez de silenciosamente retornar o resultado em cache
   errado.
+
+### Corrigido (corretude do consentimento de pagamento, encontrado ao gerar os clientes tipados da P1.1)
+
+- **Família errada do Diretório para consentimento de pagamento**:
+  `tools/payments.py` e `tools/pix.py` resolviam uma família
+  `"payments-consents"` via `DirectoryClient.resolve()` - essa família
+  não existe no registro real do Diretório de Participantes. O
+  consentimento de pagamento (`POST /consents`) faz parte da própria
+  família `payments`; o código antigo falharia com `API_FAMILY_NOT_FOUND`
+  contra qualquer banco real. Agora resolve `"payments"`.
+- **Path/versão errados do endpoint de consentimento de pagamento**:
+  `auth/payment_consent.py` chamava `POST/GET {base}/payments/v1/consents`
+  - o path oficialmente publicado é `/payments/v4/consents`
+  (`payments/v5` não existe).
+- **Requisição/resposta do consentimento de pagamento tratadas como JSON
+  puro**: conforme o spec oficial, `POST /consents` e `GET
+  /consents/{id}` exigem que o corpo da requisição seja assinado e
+  retornado como JWS (`Content-Type: application/jwt`) nas duas
+  direções - o código antigo enviava um corpo JSON puro e chamava
+  `response.json()` diretamente, o que falharia imediatamente contra
+  qualquer banco real. As duas direções agora são assinadas/decodificadas
+  via `auth/payment_jws.py`.
 
 ### Alterado
 

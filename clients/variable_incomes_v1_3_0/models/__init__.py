@@ -1,0 +1,205 @@
+"""Contains all the data models used in inputs/outputs"""
+
+from clients.variable_incomes_v1_3_0.models.enum_variable_incomes_transactions_current_transaction_type import (
+    EnumVariableIncomesTransactionsCurrentTransactionType,
+)
+from clients.variable_incomes_v1_3_0.models.enum_variable_incomes_transactions_current_type import (
+    EnumVariableIncomesTransactionsCurrentType,
+)
+from clients.variable_incomes_v1_3_0.models.enum_variable_incomes_transactions_transaction_type import (
+    EnumVariableIncomesTransactionsTransactionType,
+)
+from clients.variable_incomes_v1_3_0.models.enum_variable_incomes_transactions_type import EnumVariableIncomesTransactionsType
+from clients.variable_incomes_v1_3_0.models.meta_only_request_date_time import MetaOnlyRequestDateTime
+from clients.variable_incomes_v1_3_0.models.meta_single import MetaSingle
+from clients.variable_incomes_v1_3_0.models.response_error_meta_single import ResponseErrorMetaSingle
+from clients.variable_incomes_v1_3_0.models.response_error_meta_single_errors_item import ResponseErrorMetaSingleErrorsItem
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_balance_data import ResponseVariableIncomesBalanceData
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_balances import ResponseVariableIncomesBalances
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker import ResponseVariableIncomesBroker
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data import ResponseVariableIncomesBrokerData
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_brokerage_fee import (
+    ResponseVariableIncomesBrokerDataBrokerageFee,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_clearing_custody_fee import (
+    ResponseVariableIncomesBrokerDataClearingCustodyFee,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_clearing_registration_fee import (
+    ResponseVariableIncomesBrokerDataClearingRegistrationFee,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_clearing_settlement_fee import (
+    ResponseVariableIncomesBrokerDataClearingSettlementFee,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_gross_value import (
+    ResponseVariableIncomesBrokerDataGrossValue,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_income_tax import (
+    ResponseVariableIncomesBrokerDataIncomeTax,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_net_value import (
+    ResponseVariableIncomesBrokerDataNetValue,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_stock_exchange_asset_trade_notice_fee import (
+    ResponseVariableIncomesBrokerDataStockExchangeAssetTradeNoticeFee,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_stock_exchange_fee import (
+    ResponseVariableIncomesBrokerDataStockExchangeFee,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_broker_data_taxes import (
+    ResponseVariableIncomesBrokerDataTaxes,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_product_identification import (
+    ResponseVariableIncomesProductIdentification,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_product_identification_data import (
+    ResponseVariableIncomesProductIdentificationData,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_product_list import ResponseVariableIncomesProductList
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_product_list_data import (
+    ResponseVariableIncomesProductListData,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions import ResponseVariableIncomesTransactions
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_current import (
+    ResponseVariableIncomesTransactionsCurrent,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_current_data import (
+    ResponseVariableIncomesTransactionsCurrentData,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_current_data_transaction_unit_price import (
+    ResponseVariableIncomesTransactionsCurrentDataTransactionUnitPrice,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_current_data_transaction_value import (
+    ResponseVariableIncomesTransactionsCurrentDataTransactionValue,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_data import (
+    ResponseVariableIncomesTransactionsData,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_data_transaction_unit_price import (
+    ResponseVariableIncomesTransactionsDataTransactionUnitPrice,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_transactions_data_transaction_value import (
+    ResponseVariableIncomesTransactionsDataTransactionValue,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_balances_blocked_balance import (
+    VariableIncomesBalancesBlockedBalance,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_balances_closing_price import VariableIncomesBalancesClosingPrice
+from clients.variable_incomes_v1_3_0.models.variable_incomes_balances_gross_amount import VariableIncomesBalancesGrossAmount
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_balances_response_423 import (
+    VariableIncomesGetInvestmentsInvestmentIdBalancesResponse423,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_balances_response_423_errors_item import (
+    VariableIncomesGetInvestmentsInvestmentIdBalancesResponse423ErrorsItem,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_balances_response_423_meta import (
+    VariableIncomesGetInvestmentsInvestmentIdBalancesResponse423Meta,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_broker_notes_broker_note_id_response_423 import (
+    VariableIncomesGetInvestmentsInvestmentIdBrokerNotesBrokerNoteIdResponse423,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_broker_notes_broker_note_id_response_423_errors_item import (
+    VariableIncomesGetInvestmentsInvestmentIdBrokerNotesBrokerNoteIdResponse423ErrorsItem,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_broker_notes_broker_note_id_response_423_meta import (
+    VariableIncomesGetInvestmentsInvestmentIdBrokerNotesBrokerNoteIdResponse423Meta,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_response_423 import (
+    VariableIncomesGetInvestmentsInvestmentIdResponse423,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_response_423_errors_item import (
+    VariableIncomesGetInvestmentsInvestmentIdResponse423ErrorsItem,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_response_423_meta import (
+    VariableIncomesGetInvestmentsInvestmentIdResponse423Meta,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_transactions_current_response_423 import (
+    VariableIncomesGetInvestmentsInvestmentIdTransactionsCurrentResponse423,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_transactions_current_response_423_errors_item import (
+    VariableIncomesGetInvestmentsInvestmentIdTransactionsCurrentResponse423ErrorsItem,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_transactions_current_response_423_meta import (
+    VariableIncomesGetInvestmentsInvestmentIdTransactionsCurrentResponse423Meta,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_transactions_response_423 import (
+    VariableIncomesGetInvestmentsInvestmentIdTransactionsResponse423,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_transactions_response_423_errors_item import (
+    VariableIncomesGetInvestmentsInvestmentIdTransactionsResponse423ErrorsItem,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_investment_id_transactions_response_423_meta import (
+    VariableIncomesGetInvestmentsInvestmentIdTransactionsResponse423Meta,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_response_423 import (
+    VariableIncomesGetInvestmentsResponse423,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_response_423_errors_item import (
+    VariableIncomesGetInvestmentsResponse423ErrorsItem,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_get_investments_response_423_meta import (
+    VariableIncomesGetInvestmentsResponse423Meta,
+)
+from clients.variable_incomes_v1_3_0.models.variable_incomes_links import VariableIncomesLinks
+from clients.variable_incomes_v1_3_0.models.variable_incomes_meta import VariableIncomesMeta
+from clients.variable_incomes_v1_3_0.models.variable_incomes_transactions_links import VariableIncomesTransactionsLinks
+
+__all__ = (
+    "EnumVariableIncomesTransactionsCurrentTransactionType",
+    "EnumVariableIncomesTransactionsCurrentType",
+    "EnumVariableIncomesTransactionsTransactionType",
+    "EnumVariableIncomesTransactionsType",
+    "MetaOnlyRequestDateTime",
+    "MetaSingle",
+    "ResponseErrorMetaSingle",
+    "ResponseErrorMetaSingleErrorsItem",
+    "ResponseVariableIncomesBalanceData",
+    "ResponseVariableIncomesBalances",
+    "ResponseVariableIncomesBroker",
+    "ResponseVariableIncomesBrokerData",
+    "ResponseVariableIncomesBrokerDataBrokerageFee",
+    "ResponseVariableIncomesBrokerDataClearingCustodyFee",
+    "ResponseVariableIncomesBrokerDataClearingRegistrationFee",
+    "ResponseVariableIncomesBrokerDataClearingSettlementFee",
+    "ResponseVariableIncomesBrokerDataGrossValue",
+    "ResponseVariableIncomesBrokerDataIncomeTax",
+    "ResponseVariableIncomesBrokerDataNetValue",
+    "ResponseVariableIncomesBrokerDataStockExchangeAssetTradeNoticeFee",
+    "ResponseVariableIncomesBrokerDataStockExchangeFee",
+    "ResponseVariableIncomesBrokerDataTaxes",
+    "ResponseVariableIncomesProductIdentification",
+    "ResponseVariableIncomesProductIdentificationData",
+    "ResponseVariableIncomesProductList",
+    "ResponseVariableIncomesProductListData",
+    "ResponseVariableIncomesTransactions",
+    "ResponseVariableIncomesTransactionsCurrent",
+    "ResponseVariableIncomesTransactionsCurrentData",
+    "ResponseVariableIncomesTransactionsCurrentDataTransactionUnitPrice",
+    "ResponseVariableIncomesTransactionsCurrentDataTransactionValue",
+    "ResponseVariableIncomesTransactionsData",
+    "ResponseVariableIncomesTransactionsDataTransactionUnitPrice",
+    "ResponseVariableIncomesTransactionsDataTransactionValue",
+    "VariableIncomesBalancesBlockedBalance",
+    "VariableIncomesBalancesClosingPrice",
+    "VariableIncomesBalancesGrossAmount",
+    "VariableIncomesGetInvestmentsInvestmentIdBalancesResponse423",
+    "VariableIncomesGetInvestmentsInvestmentIdBalancesResponse423ErrorsItem",
+    "VariableIncomesGetInvestmentsInvestmentIdBalancesResponse423Meta",
+    "VariableIncomesGetInvestmentsInvestmentIdBrokerNotesBrokerNoteIdResponse423",
+    "VariableIncomesGetInvestmentsInvestmentIdBrokerNotesBrokerNoteIdResponse423ErrorsItem",
+    "VariableIncomesGetInvestmentsInvestmentIdBrokerNotesBrokerNoteIdResponse423Meta",
+    "VariableIncomesGetInvestmentsInvestmentIdResponse423",
+    "VariableIncomesGetInvestmentsInvestmentIdResponse423ErrorsItem",
+    "VariableIncomesGetInvestmentsInvestmentIdResponse423Meta",
+    "VariableIncomesGetInvestmentsInvestmentIdTransactionsCurrentResponse423",
+    "VariableIncomesGetInvestmentsInvestmentIdTransactionsCurrentResponse423ErrorsItem",
+    "VariableIncomesGetInvestmentsInvestmentIdTransactionsCurrentResponse423Meta",
+    "VariableIncomesGetInvestmentsInvestmentIdTransactionsResponse423",
+    "VariableIncomesGetInvestmentsInvestmentIdTransactionsResponse423ErrorsItem",
+    "VariableIncomesGetInvestmentsInvestmentIdTransactionsResponse423Meta",
+    "VariableIncomesGetInvestmentsResponse423",
+    "VariableIncomesGetInvestmentsResponse423ErrorsItem",
+    "VariableIncomesGetInvestmentsResponse423Meta",
+    "VariableIncomesLinks",
+    "VariableIncomesMeta",
+    "VariableIncomesTransactionsLinks",
+)

@@ -1,0 +1,11 @@
+"""EnumPartiePersonType: enum of possible values (PESSOA_JURIDICA, PESSOA_NATURAL) for this field, per the Accounts OpenAPI spec."""
+
+from enum import Enum
+
+
+class EnumPartiePersonType(str, Enum):
+    PESSOA_JURIDICA = "PESSOA_JURIDICA"
+    PESSOA_NATURAL = "PESSOA_NATURAL"
+
+    def __str__(self) -> str:
+        return str(self.value)
