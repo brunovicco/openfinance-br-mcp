@@ -63,6 +63,7 @@ def _configure_private_key(
     individual test happens to call initiate_pix."""
     monkeypatch.setattr(settings, "private_key_path", rsa_private_key_path)
 
+
 ADAPTER_CASES = [
     pytest.param(NubankAdapter, _NUBANK_BASE, "nubank", id="nubank"),
     pytest.param(SicoobAdapter, _SICOOB_BASE, "sicoob", id="sicoob"),
@@ -591,6 +592,229 @@ async def test_list_investments_parses_response(
     assert result.data[0].brand_name == "Test Bank"
     assert result.data[0].gross_amount == Decimal("1000.00")
     assert result.data[0].net_amount == Decimal("950.00")
+
+
+@pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_funds_parses_response(
+    adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
+) -> None:
+    """P1.3: the funds product-list endpoint only identifies each fund
+    (brand, CNPJ, investment ID, ANBIMA category) - quota quantity/
+    price and gross/net amounts come from /balances, and the fund's
+    own name/CNPJ (distinct from the managing institution's) from
+    product identification (/{investmentId}). Both must be mocked or
+    the fund is dropped from the result (see _fetch_fund_detail)."""
+    respx.get(f"{base_url}/funds/v1/investments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "investmentId": "fund-1",
+                        "brandName": "Test Bank",
+                        "companyCnpj": "11222333000181",
+                        "anbimaCategory": "RENDA_FIXA",
+                    }
+                ],
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/funds/v1/investments/fund-1/balances").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "referenceDate": "2026-07-01",
+                    "grossAmount": {"amount": "1000.00", "currency": "BRL"},
+                    "netAmount": {"amount": "950.00", "currency": "BRL"},
+                    "incomeTaxProvision": {"amount": "50.00", "currency": "BRL"},
+                    "financialTransactionTaxProvision": {
+                        "amount": "0.00",
+                        "currency": "BRL",
+                    },
+                    "blockedAmount": {"amount": "0.00", "currency": "BRL"},
+                    "quotaQuantity": "10.00000000",
+                    "quotaGrossPriceValue": {"amount": "100.00", "currency": "BRL"},
+                },
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/funds/v1/investments/fund-1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {"name": "Test Fund FIA", "cnpjNumber": "22333444000155"},
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    adapter = adapter_cls(token_store, httpx.AsyncClient())
+
+    result = await adapter.list_funds(SUBJECT_ID)
+
+    assert result.total_records == 1
+    assert result.data[0].investment_id == "fund-1"
+    assert result.data[0].brand_name == "Test Bank"
+    assert result.data[0].fund_name == "Test Fund FIA"
+    assert result.data[0].quota_quantity == Decimal("10.00000000")
+    assert result.data[0].gross_amount == Decimal("1000.00")
+    assert result.data[0].net_amount == Decimal("950.00")
+
+
+@pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_variable_incomes_parses_response(
+    adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
+) -> None:
+    """P1.3: the variable-incomes product-list endpoint only identifies
+    each asset - ISIN/ticker come from product identification, and
+    quantity/closing price/gross amount from /balances. Both must be
+    mocked or the asset is dropped from the result (see
+    _fetch_variable_income_detail)."""
+    respx.get(f"{base_url}/variable-incomes/v1/investments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "investmentId": "vi-1",
+                        "brandName": "Test Bank",
+                        "companyCnpj": "11222333000181",
+                    }
+                ],
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/variable-incomes/v1/investments/vi-1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {"isinCode": "BRPETRACNPR6", "ticker": "PETR4"},
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/variable-incomes/v1/investments/vi-1/balances").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "referenceDate": "2026-07-01",
+                    "priceFactor": "1.0000",
+                    "grossAmount": {"amount": "3650.00", "currency": "BRL"},
+                    "blockedBalance": {"amount": "0.00", "currency": "BRL"},
+                    "quantity": "100.00000000",
+                    "closingPrice": {"amount": "36.50", "currency": "BRL"},
+                },
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    adapter = adapter_cls(token_store, httpx.AsyncClient())
+
+    result = await adapter.list_variable_incomes(SUBJECT_ID)
+
+    assert result.total_records == 1
+    assert result.data[0].investment_id == "vi-1"
+    assert result.data[0].brand_name == "Test Bank"
+    assert result.data[0].ticker == "PETR4"
+    assert result.data[0].isin_code == "BRPETRACNPR6"
+    assert result.data[0].quantity == Decimal("100.00000000")
+    assert result.data[0].gross_amount == Decimal("3650.00")
+
+
+@pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_treasure_titles_parses_response(
+    adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
+) -> None:
+    """P1.3: the treasure-titles product-list endpoint only identifies
+    each title - ISIN/name/dates come from product identification, and
+    quantity/updated price/gross/net amount from /balances. Both must
+    be mocked or the title is dropped from the result (see
+    _fetch_treasure_title_detail)."""
+    respx.get(f"{base_url}/treasure-titles/v1/investments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "investmentId": "tt-1",
+                        "brandName": "Test Bank",
+                        "companyCnpj": "11222333000181",
+                    }
+                ],
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/treasure-titles/v1/investments/tt-1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "isinCode": "BRSTNCLTN0R2",
+                    "productName": "Tesouro Selic 2029",
+                    "remuneration": {
+                        "rateType": "LINEAR",
+                        "ratePeriodicity": "MENSAL",
+                        "calculation": "DIAS_CORRIDOS",
+                        "indexer": "SELIC",
+                    },
+                    "dueDate": "2029-03-01",
+                    "purchaseDate": "2026-01-15",
+                    "voucherPaymentIndicator": "NAO",
+                },
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    respx.get(f"{base_url}/treasure-titles/v1/investments/tt-1/balances").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "referenceDateTime": "2026-07-01T00:00:00Z",
+                    "updatedUnitPrice": {"amount": "14500.00", "currency": "BRL"},
+                    "grossAmount": {"amount": "14500.00", "currency": "BRL"},
+                    "netAmount": {"amount": "13800.00", "currency": "BRL"},
+                    "incomeTax": {"amount": "700.00", "currency": "BRL"},
+                    "blockedBalance": {"amount": "0.00", "currency": "BRL"},
+                    "purchaseUnitPrice": {"amount": "13000.00", "currency": "BRL"},
+                    "quantity": "1.00000000",
+                },
+                "links": _LINKS,
+                "meta": _META,
+            },
+        )
+    )
+    adapter = adapter_cls(token_store, httpx.AsyncClient())
+
+    result = await adapter.list_treasure_titles(SUBJECT_ID)
+
+    assert result.total_records == 1
+    assert result.data[0].investment_id == "tt-1"
+    assert result.data[0].brand_name == "Test Bank"
+    assert result.data[0].product_name == "Tesouro Selic 2029"
+    assert result.data[0].due_date is not None
+    assert result.data[0].due_date.isoformat() == "2029-03-01"
+    assert result.data[0].gross_amount == Decimal("14500.00")
+    assert result.data[0].net_amount == Decimal("13800.00")
 
 
 @pytest.mark.parametrize(("adapter_cls", "base_url", "expected_bank_id"), ADAPTER_CASES)

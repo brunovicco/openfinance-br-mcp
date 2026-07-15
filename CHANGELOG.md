@@ -113,6 +113,45 @@ validation (P3) is tracked separately.
   would fail immediately against any real bank. Both directions are now
   signed/decoded via `auth/payment_jws.py`.
 
+### Added (P1.1/P1.2/P1.3 - generated clients wired in, new investment families)
+
+- **`default_adapter.py` now calls the generated, typed clients** vendored
+  under `clients/` (see the "vendor OpenAPI-generated typed clients" entry
+  above) for every read/query endpoint, instead of building URLs by hand and
+  parsing `response.json()` loosely with `.get(key, default)` fallbacks. The
+  generated models are strict about required fields, which surfaced several
+  real parsing bugs invisible to the old lenient parsing: every BCB monetary
+  value is a nested `{"amount": ..., "currency": ...}` object, never a flat
+  string (`get_balance`, `get_credit_card_bills`, transaction/investment
+  amounts); `list_transactions` read `transactionDate`/`bookingDate` and a
+  flat `amount` key that don't exist on the real schema (now
+  `transactionDateTime`/`transactionAmount`); credit card
+  `availableCreditLimit`/`totalCreditLimit` are on a dedicated `/limits`
+  endpoint, not inlined on the accounts list.
+- **`PaymentType`** (`schemas/transaction.py`) previously duplicated
+  `CreditDebitType`'s values (`DEBITO`/`CREDITO`) - a copy-paste bug. The
+  real spec's `completedAuthorisedPaymentType` values are
+  `TRANSACAO_EFETIVADA`/`LANCAMENTO_FUTURO`/`TRANSACAO_PROCESSANDO`; every
+  real transaction would have raised `ValueError` before this fix.
+- **`BankEndpoints`** (`adapters/base.py`): typed catalog of per-family base
+  URLs replacing the old `dict[str, str]` mechanism, now resolving 4 more
+  Directory API families than before (`consents`, `funds`,
+  `variable-incomes`, `treasure-titles` - previously only
+  `credit-cards-accounts`/`payments`/`bank-fixed-incomes`).
+- **`list_funds`, `list_variable_incomes`, `list_treasure_titles`**: three
+  new tools (`tools/investments.py`) and adapter methods covering the
+  remaining investment API families declared in the consent scope map but
+  previously unimplemented (`funds` 1.1.0, `variable-incomes` 1.3.0,
+  `treasure-titles` 1.1.0). Each follows the same two-call pattern as
+  `list_investments`: a product-list endpoint identifies each position,
+  gross/net amount and product detail (quota price, ticker/ISIN, maturity
+  date) come from separate `/balances` and product-identification
+  endpoints, fetched concurrently per position. New schemas `Fund`,
+  `VariableIncome`, `TreasureTitle` (`schemas/investment.py`). Note:
+  `list_variable_incomes` returns a gross amount only, not net - the real
+  spec's balance data for this family doesn't publish a running net
+  position (taxes/fees are reported per-transaction via broker notes).
+
 ### Changed
 
 - `initiate_pix` is no longer restricted to `environment=mock`. Outside

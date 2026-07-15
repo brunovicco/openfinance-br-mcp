@@ -36,8 +36,14 @@ from openfinance_br_mcp.schemas.credit_card import (
 )
 from openfinance_br_mcp.schemas.investment import (
     BankFixedIncome,
+    Fund,
+    FundList,
     InvestmentList,
     InvestmentType,
+    TreasureTitle,
+    TreasureTitleList,
+    VariableIncome,
+    VariableIncomeList,
 )
 from openfinance_br_mcp.schemas.pix import (
     PixKey,
@@ -279,3 +285,72 @@ class MockOpenFinanceAdapter(BankAdapter):
             net_amount=Decimal("9800.00"),
         )
         return InvestmentList(data=[investment], total_records=1)
+
+    async def list_funds(self, subject_id: str) -> FundList:
+        """Returns a single canned fund position.
+
+        Args:
+            subject_id: User ID (accepted but not used by the mock).
+
+        Returns:
+            A one-item FundList.
+        """
+        fund = Fund(
+            investment_id="mock-fund-001",
+            brand_name=self._bank_id,
+            company_cnpj="00000000000000",
+            fund_name=f"{self._bank_id.title()} FIA Master",
+            anbima_category="ACOES",
+            quota_quantity=Decimal("42.25000000"),
+            quota_gross_price_value=Decimal("120.50000000"),
+            reference_date=date(2026, 7, 1),
+            gross_amount=Decimal("5091.13"),
+            net_amount=Decimal("4850.00"),
+        )
+        return FundList(data=[fund], total_records=1)
+
+    async def list_variable_incomes(self, subject_id: str) -> VariableIncomeList:
+        """Returns a single canned variable income position.
+
+        Args:
+            subject_id: User ID (accepted but not used by the mock).
+
+        Returns:
+            A one-item VariableIncomeList.
+        """
+        asset = VariableIncome(
+            investment_id="mock-vi-001",
+            brand_name=self._bank_id,
+            company_cnpj="00000000000000",
+            isin_code="BRPETRACNPR6",
+            ticker="PETR4",
+            quantity=Decimal("100.00000000"),
+            closing_price=Decimal("36.50000000"),
+            reference_date=date(2026, 7, 1),
+            gross_amount=Decimal("3650.00"),
+        )
+        return VariableIncomeList(data=[asset], total_records=1)
+
+    async def list_treasure_titles(self, subject_id: str) -> TreasureTitleList:
+        """Returns a single canned treasury bond position.
+
+        Args:
+            subject_id: User ID (accepted but not used by the mock).
+
+        Returns:
+            A one-item TreasureTitleList.
+        """
+        title = TreasureTitle(
+            investment_id="mock-tt-001",
+            brand_name=self._bank_id,
+            company_cnpj="00000000000000",
+            isin_code="BRSTNCLTN0R2",
+            product_name="Tesouro Selic 2029",
+            due_date=date(2029, 3, 1),
+            purchase_date=date(2026, 1, 15),
+            quantity=Decimal("1.00000000"),
+            updated_unit_price=Decimal("14500.00000000"),
+            gross_amount=Decimal("14500.00"),
+            net_amount=Decimal("13800.00"),
+        )
+        return TreasureTitleList(data=[title], total_records=1)

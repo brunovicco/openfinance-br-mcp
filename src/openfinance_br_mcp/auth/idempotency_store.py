@@ -170,9 +170,7 @@ class IdempotencyStore:
                         "idempotency_key for a different payment.",
                         code="IDEMPOTENCY_KEY_CONFLICT",
                     )
-                log.info(
-                    "idempotency_replay", bank_id=bank_id, subject_id=subject_id
-                )
+                log.info("idempotency_replay", bank_id=bank_id, subject_id=subject_id)
                 return str(record["response"])
 
             response = await compute()
@@ -180,7 +178,5 @@ class IdempotencyStore:
             await self._store.set(
                 key, json.dumps(record), ttl_seconds=self._ttl_seconds
             )
-            log.info(
-                "idempotency_recorded", bank_id=bank_id, subject_id=subject_id
-            )
+            log.info("idempotency_recorded", bank_id=bank_id, subject_id=subject_id)
             return response

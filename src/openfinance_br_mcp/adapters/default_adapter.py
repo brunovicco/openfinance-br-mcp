@@ -57,6 +57,7 @@ Example:
 import asyncio
 from datetime import UTC, datetime
 from datetime import date as dt_date
+from decimal import Decimal
 from http import HTTPStatus
 from typing import Any
 
@@ -120,6 +121,65 @@ from clients.credit_cards_v2_3_1.models.response_credit_card_accounts_limits imp
 from clients.credit_cards_v2_3_1.models.response_credit_card_accounts_list import (
     ResponseCreditCardAccountsList,
 )
+from clients.funds_v1_1_0.api.balances import (
+    funds_get_investments_investment_id_balances as funds_get_balances,
+)
+from clients.funds_v1_1_0.api.product_identification import (
+    funds_get_investments_investment_id as funds_get_product_identification,
+)
+from clients.funds_v1_1_0.api.product_list import (
+    funds_get_investments,
+)
+from clients.funds_v1_1_0.client import AuthenticatedClient as FundsAuthClient
+from clients.funds_v1_1_0.models.response_funds_balances import ResponseFundsBalances
+from clients.funds_v1_1_0.models.response_funds_product_identification import (  # noqa: E501
+    ResponseFundsProductIdentification,
+)
+from clients.funds_v1_1_0.models.response_funds_product_list import (
+    ResponseFundsProductList,
+)
+from clients.treasure_titles_v1_1_0.api.balances import (
+    treasure_titles_get_investments_investment_id_balances as tt_get_balances,
+)
+from clients.treasure_titles_v1_1_0.api.product_identification import (
+    treasure_titles_get_investments_investment_id as tt_get_product_identification,
+)
+from clients.treasure_titles_v1_1_0.api.product_list import (
+    treasure_titles_get_investments,
+)
+from clients.treasure_titles_v1_1_0.client import (
+    AuthenticatedClient as TreasureTitlesAuthClient,
+)
+from clients.treasure_titles_v1_1_0.models.response_treasure_titles_balances import (  # noqa: E501
+    ResponseTreasureTitlesBalances,
+)
+from clients.treasure_titles_v1_1_0.models.response_treasure_titles_identify_product import (  # noqa: E501
+    ResponseTreasureTitlesIdentifyProduct,
+)
+from clients.treasure_titles_v1_1_0.models.response_treasure_titles_list_product import (  # noqa: E501
+    ResponseTreasureTitlesListProduct,
+)
+from clients.variable_incomes_v1_3_0.api.balances import (
+    variable_incomes_get_investments_investment_id_balances as vi_get_balances,
+)
+from clients.variable_incomes_v1_3_0.api.product_identification import (
+    variable_incomes_get_investments_investment_id as vi_get_product_identification,
+)
+from clients.variable_incomes_v1_3_0.api.product_list import (
+    variable_incomes_get_investments,
+)
+from clients.variable_incomes_v1_3_0.client import (
+    AuthenticatedClient as VariableIncomesAuthClient,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_balances import (  # noqa: E501
+    ResponseVariableIncomesBalances,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_product_identification import (  # noqa: E501
+    ResponseVariableIncomesProductIdentification,
+)
+from clients.variable_incomes_v1_3_0.models.response_variable_incomes_product_list import (  # noqa: E501
+    ResponseVariableIncomesProductList,
+)
 from openfinance_br_mcp.adapters.base import (
     BankAdapter,
     BankEndpoints,
@@ -146,8 +206,14 @@ from openfinance_br_mcp.schemas.credit_card import (
 )
 from openfinance_br_mcp.schemas.investment import (
     BankFixedIncome,
+    Fund,
+    FundList,
     InvestmentList,
     InvestmentType,
+    TreasureTitle,
+    TreasureTitleList,
+    VariableIncome,
+    VariableIncomeList,
 )
 from openfinance_br_mcp.schemas.pix import (
     PixKey,
@@ -325,9 +391,7 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         version = _FAMILY_VERSIONS[api_family_type]
         return f"{self._url_for(api_family_type)}/{api_family_type}/{version}"
 
-    def _generated_client(
-        self, api_family_type: str, client_cls: type[Any]
-    ) -> Any:
+    def _generated_client(self, api_family_type: str, client_cls: type[Any]) -> Any:
         """Returns the cached generated client for a family, building it
         on first use.
 
@@ -412,6 +476,40 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         )
         return client
 
+    def _funds_client(self) -> FundsAuthClient:
+        """Returns the cached generated Funds API client.
+
+        Returns:
+            AuthenticatedClient ready to pass to any
+            ``clients.funds_v1_1_0.api.*`` operation.
+        """
+        client: FundsAuthClient = self._generated_client("funds", FundsAuthClient)
+        return client
+
+    def _variable_incomes_client(self) -> VariableIncomesAuthClient:
+        """Returns the cached generated Variable Incomes API client.
+
+        Returns:
+            AuthenticatedClient ready to pass to any
+            ``clients.variable_incomes_v1_3_0.api.*`` operation.
+        """
+        client: VariableIncomesAuthClient = self._generated_client(
+            "variable-incomes", VariableIncomesAuthClient
+        )
+        return client
+
+    def _treasure_titles_client(self) -> TreasureTitlesAuthClient:
+        """Returns the cached generated Treasure Titles API client.
+
+        Returns:
+            AuthenticatedClient ready to pass to any
+            ``clients.treasure_titles_v1_1_0.api.*`` operation.
+        """
+        client: TreasureTitlesAuthClient = self._generated_client(
+            "treasure-titles", TreasureTitlesAuthClient
+        )
+        return client
+
     async def aclose(self) -> None:
         """Closes every lazily-built per-family generated-client httpx.AsyncClient.
 
@@ -463,8 +561,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         return response.parsed
 
     @staticmethod
-    def _extract_amount(raw: dict[str, Any], key: str, default: str = "0") -> str:
-        """Unwraps a required BCB monetary sub-object into a plain string.
+    def _extract_amount(raw: dict[str, Any], key: str, default: str = "0") -> Decimal:
+        """Unwraps a required BCB monetary sub-object into a Decimal.
 
         Every monetary value in the real Open Finance Brasil APIs is a
         nested ``{"amount": "123.45", "currency": "BRL"}`` object, not
@@ -474,28 +572,44 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         which this file's parsing previously didn't account for (see
         this module's docstring).
 
+        Returns a ``Decimal`` rather than the raw string (as this
+        method did before pyright/Pylance was checked against this
+        file): every caller immediately feeds the result into a
+        Pydantic model field typed ``Decimal`` - Pydantic itself
+        coerces a plain ``str`` at runtime, so mypy's Pydantic plugin
+        never flagged it, but pyright has no such plugin and correctly
+        treats passing a ``str`` where ``Decimal`` is declared as a
+        type error. Also handles the value already being a
+        ``Decimal`` (not just a nested dict or plain string): several
+        call sites (``list_investments``/``list_funds``/
+        ``list_variable_incomes``/``list_treasure_titles``) extract an
+        amount once into a flat ``detail`` dict that gets merged back
+        into ``raw`` and re-extracted a second time by the ``_parse_*``
+        method - ``Decimal(str(value))`` round-trips a ``Decimal``
+        input back to an equal ``Decimal`` unchanged, so the second
+        extraction stays correct either way.
+
         Args:
             raw: The parent dict (already unwrapped via a generated
                 model's ``.to_dict()``).
             key: The camelCase key holding the amount sub-object (e.g.
                 'availableAmount').
-            default: Returned if the key is missing or its 'amount'
-                sub-key is missing.
+            default: Returned (as a ``Decimal``) if the key is missing
+                or its 'amount' sub-key is missing.
 
         Returns:
-            The amount as a string, ready for a Pydantic ``Decimal``
-            field.
+            The amount as a ``Decimal``, ready for a Pydantic model field.
         """
         value = raw.get(key)
         if isinstance(value, dict):
             amount = value.get("amount")
-            return str(amount) if amount is not None else default
+            return Decimal(str(amount)) if amount is not None else Decimal(default)
         if value is None:
-            return default
-        return str(value)
+            return Decimal(default)
+        return Decimal(str(value))
 
     @staticmethod
-    def _extract_optional_amount(raw: dict[str, Any], key: str) -> str | None:
+    def _extract_optional_amount(raw: dict[str, Any], key: str) -> Decimal | None:
         """Same as ``_extract_amount``, for optional monetary fields.
 
         Args:
@@ -503,13 +617,13 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             key: The camelCase key holding the amount sub-object.
 
         Returns:
-            The amount as a string, or ``None`` if absent.
+            The amount as a ``Decimal``, or ``None`` if absent.
         """
         value = raw.get(key)
         if isinstance(value, dict):
             amount = value.get("amount")
-            return str(amount) if amount is not None else None
-        return str(value) if value is not None else None
+            return Decimal(str(amount)) if amount is not None else None
+        return Decimal(str(value)) if value is not None else None
 
     @property
     def base_url(self) -> str:
@@ -698,7 +812,7 @@ class DefaultOpenFinanceAdapter(BankAdapter):
 
     async def _fetch_credit_card_limits(
         self, client: CreditCardsAuthClient, token: str, credit_card_account_id: str
-    ) -> tuple[str | None, str | None] | None:
+    ) -> tuple[Decimal | None, Decimal | None] | None:
         """Fetches and extracts the total credit limit for one card.
 
         Args:
@@ -1012,6 +1126,343 @@ class DefaultOpenFinanceAdapter(BankAdapter):
 
         return detail
 
+    async def list_funds(self, subject_id: str) -> FundList:
+        """Lists investment fund positions (P1.3).
+
+        Same two-call pattern as ``list_investments``: the product-list
+        endpoint only identifies each fund (brand, CNPJ, investment ID,
+        ANBIMA category) - quota quantity/price and gross/net amounts
+        live on the separate ``/balances`` endpoint, and the fund's own
+        name/CNPJ (distinct from the managing institution's) on
+        ``/{investmentId}`` (product identification). Fetched
+        concurrently per fund; a detail-fetch failure logs and drops
+        that fund rather than failing the whole listing.
+
+        Args:
+            subject_id: User ID.
+
+        Returns:
+            List of investment funds.
+        """
+        token = await self._get_token(subject_id)
+        client = self._funds_client()
+        response = await funds_get_investments.asyncio_detailed(
+            client=client, **build_fapi_call_kwargs(token)
+        )
+        parsed = self._require(response, ResponseFundsProductList, "listing funds")
+        raw_items: list[dict[str, Any]] = parsed.to_dict().get("data", [])
+
+        details = await asyncio.gather(
+            *(
+                self._fetch_fund_detail(client, token, item["investmentId"])
+                for item in raw_items
+            ),
+            return_exceptions=True,
+        )
+        merged: list[dict[str, Any]] = []
+        for item, detail in zip(raw_items, details, strict=True):
+            if isinstance(detail, BaseException):
+                log.warning(
+                    "fund_detail_fetch_failed",
+                    bank_id=self.bank_id,
+                    investment_id=item.get("investmentId"),
+                    error=str(detail),
+                )
+                continue
+            merged.append({**item, **detail})
+
+        return FundList(
+            data=[self._parse_fund(item) for item in merged],
+            total_records=len(merged),
+        )
+
+    async def _fetch_fund_detail(
+        self, client: FundsAuthClient, token: str, investment_id: str
+    ) -> dict[str, Any]:
+        """Fetches and flattens one fund's balance + product identification.
+
+        Args:
+            client: Generated Funds client.
+            token: Access token for these calls.
+            investment_id: ID of the fund.
+
+        Returns:
+            Flat dict with the legacy-shaped keys ``_parse_fund``
+            expects - whichever of the two calls succeeded.
+        """
+        balances_response, identification_response = await asyncio.gather(
+            funds_get_balances.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+            funds_get_product_identification.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+        )
+
+        detail: dict[str, Any] = {}
+
+        if int(balances_response.status_code) == HTTPStatus.OK and isinstance(
+            balances_response.parsed, ResponseFundsBalances
+        ):
+            balances = balances_response.parsed.to_dict().get("data", {})
+            detail["referenceDate"] = balances.get("referenceDate")
+            detail["quotaQuantity"] = balances.get("quotaQuantity")
+            detail["quotaGrossPriceValue"] = self._extract_optional_amount(
+                balances, "quotaGrossPriceValue"
+            )
+            detail["grossAmount"] = self._extract_amount(balances, "grossAmount")
+            detail["netAmount"] = self._extract_amount(balances, "netAmount")
+        else:
+            log.warning(
+                "fund_balances_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(balances_response.status_code),
+            )
+
+        is_ok = int(identification_response.status_code) == HTTPStatus.OK
+        if is_ok and isinstance(
+            identification_response.parsed, ResponseFundsProductIdentification
+        ):
+            identification = identification_response.parsed.to_dict().get("data", {})
+            detail["fundName"] = identification.get("name")
+            detail["fundCnpj"] = identification.get("cnpjNumber")
+        else:
+            log.warning(
+                "fund_identification_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(identification_response.status_code),
+            )
+
+        return detail
+
+    async def list_variable_incomes(self, subject_id: str) -> VariableIncomeList:
+        """Lists variable income asset positions (P1.3): stocks, ETFs,
+        and other exchange-traded assets.
+
+        Same two-call pattern as ``list_investments``: the product-list
+        endpoint only identifies each asset (brand, CNPJ, investment
+        ID) - ISIN/ticker come from product identification, and
+        quantity/closing price/gross amount from ``/balances``. Fetched
+        concurrently per asset; a detail-fetch failure logs and drops
+        that asset rather than failing the whole listing.
+
+        Args:
+            subject_id: User ID.
+
+        Returns:
+            List of variable income assets.
+        """
+        token = await self._get_token(subject_id)
+        client = self._variable_incomes_client()
+        response = await variable_incomes_get_investments.asyncio_detailed(
+            client=client, **build_fapi_call_kwargs(token)
+        )
+        parsed = self._require(
+            response, ResponseVariableIncomesProductList, "listing variable incomes"
+        )
+        raw_items: list[dict[str, Any]] = parsed.to_dict().get("data", [])
+
+        details = await asyncio.gather(
+            *(
+                self._fetch_variable_income_detail(client, token, item["investmentId"])
+                for item in raw_items
+            ),
+            return_exceptions=True,
+        )
+        merged: list[dict[str, Any]] = []
+        for item, detail in zip(raw_items, details, strict=True):
+            if isinstance(detail, BaseException):
+                log.warning(
+                    "variable_income_detail_fetch_failed",
+                    bank_id=self.bank_id,
+                    investment_id=item.get("investmentId"),
+                    error=str(detail),
+                )
+                continue
+            merged.append({**item, **detail})
+
+        return VariableIncomeList(
+            data=[self._parse_variable_income(item) for item in merged],
+            total_records=len(merged),
+        )
+
+    async def _fetch_variable_income_detail(
+        self, client: VariableIncomesAuthClient, token: str, investment_id: str
+    ) -> dict[str, Any]:
+        """Fetches and flattens one asset's identification + balance.
+
+        Args:
+            client: Generated Variable Incomes client.
+            token: Access token for these calls.
+            investment_id: ID of the asset.
+
+        Returns:
+            Flat dict with the legacy-shaped keys
+            ``_parse_variable_income`` expects - whichever of the two
+            calls succeeded.
+        """
+        identification_response, balances_response = await asyncio.gather(
+            vi_get_product_identification.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+            vi_get_balances.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+        )
+
+        detail: dict[str, Any] = {}
+
+        is_ok = int(identification_response.status_code) == HTTPStatus.OK
+        if is_ok and isinstance(
+            identification_response.parsed,
+            ResponseVariableIncomesProductIdentification,
+        ):
+            identification = identification_response.parsed.to_dict().get("data", {})
+            detail["isinCode"] = identification.get("isinCode")
+            detail["ticker"] = identification.get("ticker")
+        else:
+            log.warning(
+                "variable_income_identification_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(identification_response.status_code),
+            )
+
+        if int(balances_response.status_code) == HTTPStatus.OK and isinstance(
+            balances_response.parsed, ResponseVariableIncomesBalances
+        ):
+            balances = balances_response.parsed.to_dict().get("data", {})
+            detail["referenceDate"] = balances.get("referenceDate")
+            detail["quantity"] = balances.get("quantity")
+            detail["closingPrice"] = self._extract_optional_amount(
+                balances, "closingPrice"
+            )
+            detail["grossAmount"] = self._extract_amount(balances, "grossAmount")
+        else:
+            log.warning(
+                "variable_income_balances_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(balances_response.status_code),
+            )
+
+        return detail
+
+    async def list_treasure_titles(self, subject_id: str) -> TreasureTitleList:
+        """Lists treasury bond (Tesouro Direto) positions (P1.3).
+
+        Same two-call pattern as ``list_investments``: the product-list
+        endpoint only identifies each title (brand, CNPJ, investment
+        ID) - ISIN/name/dates come from product identification, and
+        quantity/updated price/gross/net amount from ``/balances``.
+        Fetched concurrently per title; a detail-fetch failure logs and
+        drops that title rather than failing the whole listing.
+
+        Args:
+            subject_id: User ID.
+
+        Returns:
+            List of treasury bonds.
+        """
+        token = await self._get_token(subject_id)
+        client = self._treasure_titles_client()
+        response = await treasure_titles_get_investments.asyncio_detailed(
+            client=client, **build_fapi_call_kwargs(token)
+        )
+        parsed = self._require(
+            response, ResponseTreasureTitlesListProduct, "listing treasure titles"
+        )
+        raw_items: list[dict[str, Any]] = parsed.to_dict().get("data", [])
+
+        details = await asyncio.gather(
+            *(
+                self._fetch_treasure_title_detail(client, token, item["investmentId"])
+                for item in raw_items
+            ),
+            return_exceptions=True,
+        )
+        merged: list[dict[str, Any]] = []
+        for item, detail in zip(raw_items, details, strict=True):
+            if isinstance(detail, BaseException):
+                log.warning(
+                    "treasure_title_detail_fetch_failed",
+                    bank_id=self.bank_id,
+                    investment_id=item.get("investmentId"),
+                    error=str(detail),
+                )
+                continue
+            merged.append({**item, **detail})
+
+        return TreasureTitleList(
+            data=[self._parse_treasure_title(item) for item in merged],
+            total_records=len(merged),
+        )
+
+    async def _fetch_treasure_title_detail(
+        self, client: TreasureTitlesAuthClient, token: str, investment_id: str
+    ) -> dict[str, Any]:
+        """Fetches and flattens one title's identification + balance.
+
+        Args:
+            client: Generated Treasure Titles client.
+            token: Access token for these calls.
+            investment_id: ID of the title.
+
+        Returns:
+            Flat dict with the legacy-shaped keys
+            ``_parse_treasure_title`` expects - whichever of the two
+            calls succeeded.
+        """
+        identification_response, balances_response = await asyncio.gather(
+            tt_get_product_identification.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+            tt_get_balances.asyncio_detailed(
+                investment_id, client=client, **build_fapi_call_kwargs(token)
+            ),
+        )
+
+        detail: dict[str, Any] = {}
+
+        is_ok = int(identification_response.status_code) == HTTPStatus.OK
+        if is_ok and isinstance(
+            identification_response.parsed, ResponseTreasureTitlesIdentifyProduct
+        ):
+            identification = identification_response.parsed.to_dict().get("data", {})
+            detail["isinCode"] = identification.get("isinCode")
+            detail["productName"] = identification.get("productName")
+            detail["dueDate"] = identification.get("dueDate")
+            detail["purchaseDate"] = identification.get("purchaseDate")
+        else:
+            log.warning(
+                "treasure_title_identification_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(identification_response.status_code),
+            )
+
+        if int(balances_response.status_code) == HTTPStatus.OK and isinstance(
+            balances_response.parsed, ResponseTreasureTitlesBalances
+        ):
+            balances = balances_response.parsed.to_dict().get("data", {})
+            detail["quantity"] = balances.get("quantity")
+            detail["updatedUnitPrice"] = self._extract_optional_amount(
+                balances, "updatedUnitPrice"
+            )
+            detail["grossAmount"] = self._extract_amount(balances, "grossAmount")
+            detail["netAmount"] = self._extract_amount(balances, "netAmount")
+        else:
+            log.warning(
+                "treasure_title_balances_fetch_failed",
+                bank_id=self.bank_id,
+                investment_id=investment_id,
+                status_code=int(balances_response.status_code),
+            )
+
+        return detail
+
     # Parsing helpers (private)
     @staticmethod
     def _parse_account(raw: dict[str, Any]) -> Account:
@@ -1153,4 +1604,89 @@ class DefaultOpenFinanceAdapter(BankAdapter):
                 if grace_period_date
                 else None
             ),
+        )
+
+    def _parse_fund(self, raw: dict[str, Any]) -> Fund:
+        """Converts an API dict into a Fund.
+
+        Args:
+            raw: Raw dictionary from the API - the merged shape built
+                by ``list_funds``/``_fetch_fund_detail``.
+
+        Returns:
+            Fund instance.
+        """
+        reference_date = raw.get("referenceDate")
+        return Fund(
+            investment_id=raw.get("investmentId", ""),
+            brand_name=raw.get("brandName", self.bank_id),
+            company_cnpj=raw.get("companyCnpj", ""),
+            fund_name=raw.get("fundName"),
+            fund_cnpj=raw.get("fundCnpj"),
+            anbima_category=raw.get("anbimaCategory"),
+            quota_quantity=Decimal(str(raw.get("quotaQuantity") or "0")),
+            quota_gross_price_value=self._extract_optional_amount(
+                raw, "quotaGrossPriceValue"
+            )
+            or Decimal("0"),
+            reference_date=(
+                dt_date.fromisoformat(reference_date[:10]) if reference_date else None
+            ),
+            gross_amount=self._extract_amount(raw, "grossAmount"),
+            net_amount=self._extract_amount(raw, "netAmount"),
+        )
+
+    def _parse_variable_income(self, raw: dict[str, Any]) -> VariableIncome:
+        """Converts an API dict into a VariableIncome.
+
+        Args:
+            raw: Raw dictionary from the API - the merged shape built
+                by ``list_variable_incomes``/``_fetch_variable_income_detail``.
+
+        Returns:
+            VariableIncome instance.
+        """
+        reference_date = raw.get("referenceDate")
+        return VariableIncome(
+            investment_id=raw.get("investmentId", ""),
+            brand_name=raw.get("brandName", self.bank_id),
+            company_cnpj=raw.get("companyCnpj", ""),
+            isin_code=raw.get("isinCode"),
+            ticker=raw.get("ticker"),
+            quantity=Decimal(str(raw.get("quantity") or "0")),
+            closing_price=self._extract_optional_amount(raw, "closingPrice")
+            or Decimal("0"),
+            reference_date=(
+                dt_date.fromisoformat(reference_date[:10]) if reference_date else None
+            ),
+            gross_amount=self._extract_amount(raw, "grossAmount"),
+        )
+
+    def _parse_treasure_title(self, raw: dict[str, Any]) -> TreasureTitle:
+        """Converts an API dict into a TreasureTitle.
+
+        Args:
+            raw: Raw dictionary from the API - the merged shape built
+                by ``list_treasure_titles``/``_fetch_treasure_title_detail``.
+
+        Returns:
+            TreasureTitle instance.
+        """
+        due_date = raw.get("dueDate")
+        purchase_date = raw.get("purchaseDate")
+        return TreasureTitle(
+            investment_id=raw.get("investmentId", ""),
+            brand_name=raw.get("brandName", self.bank_id),
+            company_cnpj=raw.get("companyCnpj", ""),
+            isin_code=raw.get("isinCode"),
+            product_name=raw.get("productName"),
+            due_date=dt_date.fromisoformat(due_date[:10]) if due_date else None,
+            purchase_date=(
+                dt_date.fromisoformat(purchase_date[:10]) if purchase_date else None
+            ),
+            quantity=Decimal(str(raw.get("quantity") or "0")),
+            updated_unit_price=self._extract_optional_amount(raw, "updatedUnitPrice")
+            or Decimal("0"),
+            gross_amount=self._extract_amount(raw, "grossAmount"),
+            net_amount=self._extract_amount(raw, "netAmount"),
         )

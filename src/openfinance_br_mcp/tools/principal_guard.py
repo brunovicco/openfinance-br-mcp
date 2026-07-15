@@ -4,6 +4,7 @@ See ``auth/principal_binding.py`` for the rationale. Apply this
 decorator to every tool that receives a ``subject_id`` argument and
 operates on bank data (list_accounts, get_balance, list_transactions,
 list_credit_cards, get_credit_card_bills, list_investments,
+list_funds, list_variable_incomes, list_treasure_titles,
 list_pix_keys, initiate_pix, check_consent_status, revoke_consent).
 ``start_consent`` and ``complete_consent`` are deliberately excluded:
 no binding can exist yet before a consent flow has ever completed for

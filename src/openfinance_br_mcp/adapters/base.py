@@ -28,7 +28,12 @@ from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.config import settings
 from openfinance_br_mcp.schemas.account import AccountBalance, AccountList
 from openfinance_br_mcp.schemas.credit_card import Bill, CreditCardAccount
-from openfinance_br_mcp.schemas.investment import InvestmentList
+from openfinance_br_mcp.schemas.investment import (
+    FundList,
+    InvestmentList,
+    TreasureTitleList,
+    VariableIncomeList,
+)
 from openfinance_br_mcp.schemas.pix import PixKey, PixPayment, PixPaymentRequest
 from openfinance_br_mcp.schemas.transaction import TransactionFilters, TransactionList
 
@@ -338,6 +343,43 @@ class BankAdapter(ABC):
 
         Returns:
             List of investments.
+        """
+        ...
+
+    @abstractmethod
+    async def list_funds(self, subject_id: str) -> FundList:
+        """Lists the user's investment fund positions (P1.3).
+
+        Args:
+            subject_id: Identifier of the user.
+
+        Returns:
+            List of investment funds.
+        """
+        ...
+
+    @abstractmethod
+    async def list_variable_incomes(self, subject_id: str) -> VariableIncomeList:
+        """Lists the user's variable income asset positions (P1.3):
+        stocks, ETFs, and other exchange-traded assets.
+
+        Args:
+            subject_id: Identifier of the user.
+
+        Returns:
+            List of variable income assets.
+        """
+        ...
+
+    @abstractmethod
+    async def list_treasure_titles(self, subject_id: str) -> TreasureTitleList:
+        """Lists the user's treasury bond (Tesouro Direto) positions (P1.3).
+
+        Args:
+            subject_id: Identifier of the user.
+
+        Returns:
+            List of treasury bonds.
         """
         ...
 

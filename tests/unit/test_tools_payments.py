@@ -63,11 +63,7 @@ def _nubank_organisation() -> dict[str, object]:
                         "ApiFamilyType": "payments-consents",
                         "Status": "Active",
                         "ApiDiscoveryEndpoints": [
-                            {
-                                "ApiEndpoint": (
-                                    f"{PAYMENTS_BASE}/payments/v1/consents"
-                                )
-                            }
+                            {"ApiEndpoint": (f"{PAYMENTS_BASE}/payments/v1/consents")}
                         ],
                     }
                 ],
@@ -286,9 +282,7 @@ class TestCompletePaymentConsent:
         respx.get(f"{PAYMENTS_BASE}/payments/v1/consents/urn:bank:PC1").mock(
             return_value=httpx.Response(
                 200,
-                json={
-                    "data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}
-                },
+                json={"data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}},
             )
         )
         directory = DirectoryClient(http_client, base_url=DIRECTORY_BASE)

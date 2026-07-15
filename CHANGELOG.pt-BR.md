@@ -125,6 +125,48 @@ separadamente.
   qualquer banco real. As duas direções agora são assinadas/decodificadas
   via `auth/payment_jws.py`.
 
+### Adicionado (P1.1/P1.2/P1.3 - clientes gerados integrados, novas famílias de investimento)
+
+- **`default_adapter.py` agora chama os clientes tipados gerados** vendorizados
+  em `clients/` (ver a entrada "vendoriza clientes tipados gerados via
+  OpenAPI" acima) em toda chamada de leitura/consulta, em vez de montar URLs
+  manualmente e fazer parsing frouxo de `response.json()` com
+  `.get(chave, padrão)`. Os modelos gerados são estritos quanto a campos
+  obrigatórios, o que revelou vários bugs de parsing reais invisíveis ao
+  parsing frouxo anterior: todo valor monetário da BCB é um objeto aninhado
+  `{"amount": ..., "currency": ...}`, nunca uma string plana (`get_balance`,
+  `get_credit_card_bills`, valores de transação/investimento);
+  `list_transactions` lia `transactionDate`/`bookingDate` e uma chave `amount`
+  plana que não existem no schema real (agora
+  `transactionDateTime`/`transactionAmount`); `availableCreditLimit`/
+  `totalCreditLimit` do cartão de crédito estão em um endpoint `/limits`
+  dedicado, não embutidos na listagem de contas.
+- **`PaymentType`** (`schemas/transaction.py`) duplicava anteriormente os
+  valores de `CreditDebitType` (`DEBITO`/`CREDITO`) - um bug de copiar e
+  colar. Os valores reais de `completedAuthorisedPaymentType` no spec são
+  `TRANSACAO_EFETIVADA`/`LANCAMENTO_FUTURO`/`TRANSACAO_PROCESSANDO`; toda
+  transação real geraria `ValueError` antes desta correção.
+- **`BankEndpoints`** (`adapters/base.py`): catálogo tipado de URLs base por
+  família substituindo o antigo mecanismo `dict[str, str]`, agora resolvendo
+  mais 4 famílias de API do Diretório do que antes (`consents`, `funds`,
+  `variable-incomes`, `treasure-titles` - antes só
+  `credit-cards-accounts`/`payments`/`bank-fixed-incomes`).
+- **`list_funds`, `list_variable_incomes`, `list_treasure_titles`**: três
+  novas tools (`tools/investments.py`) e métodos de adapter cobrindo as
+  famílias de API de investimento restantes, já declaradas no mapa de
+  escopos de consentimento mas sem implementação até então (`funds` 1.1.0,
+  `variable-incomes` 1.3.0, `treasure-titles` 1.1.0). Cada uma segue o
+  mesmo padrão de duas chamadas de `list_investments`: um endpoint de
+  listagem de produtos identifica cada posição, e o valor bruto/líquido e
+  detalhes do produto (preço da cota, ticker/ISIN, data de vencimento) vêm
+  de endpoints separados de `/balances` e identificação de produto,
+  buscados concorrentemente por posição. Novos schemas `Fund`,
+  `VariableIncome`, `TreasureTitle` (`schemas/investment.py`). Nota:
+  `list_variable_incomes` retorna apenas valor bruto, não líquido - os
+  dados de saldo do spec real para essa família não publicam uma posição
+  líquida corrente (impostos/taxas são reportados por transação via notas
+  de corretagem).
+
 ### Alterado
 
 - `initiate_pix` não é mais restrita a `environment=mock`. Fora do modo

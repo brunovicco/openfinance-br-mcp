@@ -58,7 +58,12 @@ from openfinance_br_mcp.tools.credit_cards import (
     get_credit_card_bills,
     list_credit_cards,
 )
-from openfinance_br_mcp.tools.investments import list_investments
+from openfinance_br_mcp.tools.investments import (
+    list_funds,
+    list_investments,
+    list_treasure_titles,
+    list_variable_incomes,
+)
 from openfinance_br_mcp.tools.payments import (
     check_payment_consent_status,
     complete_payment_consent,
@@ -258,6 +263,18 @@ def build_server() -> FastMCP:
     )
     mcp.add_tool(
         list_investments,
+        annotations=read_only,
+    )
+    mcp.add_tool(
+        list_funds,
+        annotations=read_only,
+    )
+    mcp.add_tool(
+        list_variable_incomes,
+        annotations=read_only,
+    )
+    mcp.add_tool(
+        list_treasure_titles,
         annotations=read_only,
     )
     mcp.add_tool(

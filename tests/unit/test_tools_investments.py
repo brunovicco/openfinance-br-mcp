@@ -13,7 +13,12 @@ import pytest
 from openfinance_br_mcp.adapters.mock_adapter import MockOpenFinanceAdapter
 from openfinance_br_mcp.context import AppContext
 from openfinance_br_mcp.exceptions import ValidationError
-from openfinance_br_mcp.tools.investments import list_investments
+from openfinance_br_mcp.tools.investments import (
+    list_funds,
+    list_investments,
+    list_treasure_titles,
+    list_variable_incomes,
+)
 
 SUBJECT_ID = "12345678900"
 
@@ -62,3 +67,79 @@ class TestListInvestments:
 
         with pytest.raises(ValidationError, match="not available"):
             await inspect.unwrap(list_investments)(SUBJECT_ID, "nubank", _fake_ctx(app))
+
+
+class TestListFunds:
+    """Tests for list_funds() (P1.3)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_funds_and_summary_for_a_known_bank(self) -> None:
+        app = _app(MockOpenFinanceAdapter("nubank"))
+
+        result = await inspect.unwrap(list_funds)(SUBJECT_ID, "nubank", _fake_ctx(app))
+
+        assert result.bank == "nubank"
+        assert result.total_records == 1
+        assert result.funds[0].investment_id == "mock-fund-001"
+        assert result.summary.total_gross_amount == 5091.13
+        assert result.summary.total_net_amount == 4850.00
+
+    @pytest.mark.asyncio
+    async def test_raises_for_unknown_bank(self) -> None:
+        app = _app(None)
+
+        with pytest.raises(ValidationError, match="not available"):
+            await inspect.unwrap(list_funds)(SUBJECT_ID, "nubank", _fake_ctx(app))
+
+
+class TestListVariableIncomes:
+    """Tests for list_variable_incomes() (P1.3)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_assets_and_gross_total_for_a_known_bank(self) -> None:
+        app = _app(MockOpenFinanceAdapter("nubank"))
+
+        result = await inspect.unwrap(list_variable_incomes)(
+            SUBJECT_ID, "nubank", _fake_ctx(app)
+        )
+
+        assert result.bank == "nubank"
+        assert result.total_records == 1
+        assert result.assets[0].ticker == "PETR4"
+        assert result.total_gross_amount == 3650.00
+
+    @pytest.mark.asyncio
+    async def test_raises_for_unknown_bank(self) -> None:
+        app = _app(None)
+
+        with pytest.raises(ValidationError, match="not available"):
+            await inspect.unwrap(list_variable_incomes)(
+                SUBJECT_ID, "nubank", _fake_ctx(app)
+            )
+
+
+class TestListTreasureTitles:
+    """Tests for list_treasure_titles() (P1.3)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_titles_and_summary_for_a_known_bank(self) -> None:
+        app = _app(MockOpenFinanceAdapter("nubank"))
+
+        result = await inspect.unwrap(list_treasure_titles)(
+            SUBJECT_ID, "nubank", _fake_ctx(app)
+        )
+
+        assert result.bank == "nubank"
+        assert result.total_records == 1
+        assert result.titles[0].investment_id == "mock-tt-001"
+        assert result.summary.total_gross_amount == 14500.00
+        assert result.summary.total_net_amount == 13800.00
+
+    @pytest.mark.asyncio
+    async def test_raises_for_unknown_bank(self) -> None:
+        app = _app(None)
+
+        with pytest.raises(ValidationError, match="not available"):
+            await inspect.unwrap(list_treasure_titles)(
+                SUBJECT_ID, "nubank", _fake_ctx(app)
+            )

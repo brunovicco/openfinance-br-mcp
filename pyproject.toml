@@ -55,6 +55,7 @@ packages = ["src/openfinance_br_mcp"]
 line-length = 88
 target-version = ["py312"]
 skip-string-normalization = false
+extend-exclude = "^/clients/"
 
 [tool.ruff]
 line-length = 88
