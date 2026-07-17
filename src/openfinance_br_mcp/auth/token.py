@@ -215,10 +215,9 @@ class TokenStore:
             bank_id: Identifier of the bank that issued this token.
             subject_id: Identifier of the user/consent.
             token: Response from the /token endpoint.
-            purpose: 'data' (default) or 'payment' - see
-                ``_composite_key``. A payment-bound token must be
-                saved with ``purpose='payment'`` so it never collides
-                with a data-sharing token for the same subject/bank.
+            purpose: Token namespace. Data consent uses ``data``;
+                payment consent uses ``payment:<consent_id>`` so concurrent
+                payment journeys cannot collide with each other or data.
         """
         token["_obtained_at"] = datetime.now(UTC)
         key = _composite_key(bank_id, subject_id, purpose)

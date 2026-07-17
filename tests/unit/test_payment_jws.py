@@ -86,3 +86,16 @@ class TestVerifyPaymentResponse:
 
         with pytest.raises(AuthenticationError, match="signature verification failed"):
             verify_payment_response(signed, jwks=jwks)
+
+    def test_rejects_algorithm_outside_explicit_allowlist(
+        self, rsa_public_key_pem: str
+    ) -> None:
+        signed = sign_payment_payload(PAYLOAD)
+        key = jwk.JWK.from_pem(rsa_public_key_pem.encode())
+        key.update(kid="test-kid")
+        jwks = {"keys": [json.loads(key.export_public())]}
+
+        with pytest.raises(AuthenticationError, match="disallowed JWS algorithm"):
+            verify_payment_response(
+                signed, jwks=jwks, allowed_algorithms=frozenset({"ES256"})
+            )

@@ -110,6 +110,41 @@ class TestResolve:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_resolve_selects_latest_active_version_and_exact_endpoint(
+        self, mock_http_client: httpx.AsyncClient
+    ) -> None:
+        organisation = _nubank_organisation()
+        resources = organisation["AuthorisationServers"][0]["ApiResources"]
+        for version in ("4.0.1", "5.0.0"):
+            resources.append(
+                {
+                    "ApiVersion": version,
+                    "ApiFamilyType": "payments-consents",
+                    "Status": "Active",
+                    "ApiDiscoveryEndpoints": [
+                        {
+                            "ApiEndpoint": (
+                                "https://openbanking.api.nubank.com.br/"
+                                f"open-banking/payments/v{version[0]}/consents"
+                            )
+                        }
+                    ],
+                }
+            )
+        respx.get(f"{DIRECTORY_BASE}/participants").mock(
+            return_value=httpx.Response(200, json=[organisation])
+        )
+        client = DirectoryClient(mock_http_client, base_url=DIRECTORY_BASE)
+
+        result = await client.resolve("nubank", "payments-consents")
+
+        assert result.api_version == "5.0.0"
+        assert result.require_collection_endpoint("/consents").endswith(
+            "/payments/v5/consents"
+        )
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_resolve_raises_for_unmapped_bank_id(
         self, mock_http_client: httpx.AsyncClient
     ) -> None:

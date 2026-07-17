@@ -7,12 +7,9 @@ tool call via ``ctx.request_context.lifespan_context``.
 Adapter construction branches on ``settings.environment``:
   - 'mock' (default): in-memory MockOpenFinanceAdapter per bank, no
     network access or credentials required.
-  - 'sandbox'/'production': real adapters, with base URLs resolved via
-    DirectoryClient against the live Directory of Participants. A
-    per-bank resolution failure is logged and falls back to that
-    adapter's hardcoded default URL rather than failing server
-    startup entirely - one bank's directory hiccup shouldn't take down
-    every other bank.
+  - 'sandbox'/'production': real adapters, with capabilities resolved via
+    DirectoryClient. Normal operation fails closed per missing bank/family;
+    sandbox may explicitly opt into hardcoded development fallbacks.
 
 Example:
     >>> mcp = FastMCP("openfinance-br-mcp", lifespan=app_lifespan)
@@ -22,7 +19,7 @@ Example:
     ...     return app.adapters["nubank"].bank_id
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -239,7 +236,8 @@ async def _build_mock_adapters() -> dict[str, BankAdapter]:
 # only families DefaultOpenFinanceAdapter had methods for at the time.
 _ADDITIONAL_API_FAMILIES = (
     "credit-cards-accounts",
-    "payments",
+    "payments-consents",
+    "payments-pix",
     "consents",
     "bank-fixed-incomes",
     "funds",
@@ -251,12 +249,9 @@ _ADDITIONAL_API_FAMILIES = (
 async def _resolve_endpoints(directory: DirectoryClient, bank_id: str) -> BankEndpoints:
     """Resolves every additional API family's base URL for one bank.
 
-    Best-effort per family: a family the Directory doesn't publish (or
-    fails to resolve) for this bank is simply left unset on the
-    returned catalog - DefaultOpenFinanceAdapter._url_for falls back to
-    the adapter's main ('accounts') base_url for any missing family, so
-    a partial result here degrades gracefully rather than failing the
-    whole adapter.
+    Best-effort per family: a family the Directory doesn't publish is
+    left unset. The adapter is configured separately to reject those
+    missing capabilities in normal real environments.
 
     Args:
         directory: Shared DirectoryClient.
@@ -270,6 +265,21 @@ async def _resolve_endpoints(directory: DirectoryClient, bank_id: str) -> BankEn
     for family in _ADDITIONAL_API_FAMILIES:
         try:
             resolved: ResolvedApi = await directory.resolve(bank_id, family)
+            if family.startswith("payments-") and not resolved.api_version.startswith(
+                "5."
+            ):
+                raise DirectoryError(
+                    f"'{family}' version '{resolved.api_version}' is unsupported; "
+                    "Payments API v5 is required",
+                    bank_id=bank_id,
+                    code="UNSUPPORTED_PAYMENTS_VERSION",
+                )
+            if family == "payments-consents":
+                family_url = resolved.require_collection_endpoint("/consents")
+            elif family == "payments-pix":
+                family_url = resolved.require_collection_endpoint("/pix/payments")
+            else:
+                family_url = resolved.base_url
         except DirectoryError as exc:
             log.warning(
                 "family_resolution_failed",
@@ -277,20 +287,28 @@ async def _resolve_endpoints(directory: DirectoryClient, bank_id: str) -> BankEn
                 api_family_type=family,
                 error=exc.message,
                 code=exc.code,
-                detail=(
-                    "This family falls back to the adapter's main "
-                    "('accounts') base_url - see _url_for()."
-                ),
+                detail="This capability remains unavailable for the bank.",
             )
             continue
-        resolved_urls[family.replace("-", "_")] = resolved.base_url
+        resolved_urls[family.replace("-", "_")] = family_url
         log.info(
             "family_resolution_ok",
             bank_id=bank_id,
             api_family_type=family,
-            base_url=resolved.base_url,
+            endpoint=family_url,
         )
     return BankEndpoints(**resolved_urls)
+
+
+def _payment_jwks_resolver(
+    directory: DirectoryClient, bank_id: str
+) -> Callable[[], Awaitable[dict[str, Any]]]:
+    """Builds a typed, bank-bound JWKS resolver for an adapter."""
+
+    async def _resolve() -> dict[str, Any]:
+        return await directory.resolve_jwks(bank_id)
+
+    return _resolve
 
 
 async def _build_real_adapters(
@@ -324,7 +342,10 @@ async def _build_real_adapters(
             sandbox Directory entry is incomplete.
     """
     adapters: dict[str, BankAdapter] = {}
-    fallback_allowed = settings.directory_fallback_mode == "hardcoded_fallback"
+    fallback_allowed = (
+        settings.directory_fallback_mode == "hardcoded_fallback"
+        and settings.environment != "production"
+    )
 
     for bank_id, adapter_cls in _ADAPTER_CLASSES.items():
         try:
@@ -345,6 +366,9 @@ async def _build_real_adapters(
             if fallback_allowed:
                 adapter = adapter_cls(token_store, http_client)
                 adapter.set_endpoints(await _resolve_endpoints(directory, bank_id))
+                adapter.configure_payment_jwks_resolver(
+                    _payment_jwks_resolver(directory, bank_id)
+                )
                 adapter.configure_generated_clients(
                     timeout=httpx.Timeout(settings.http_timeout_seconds),
                     httpx_args=_generated_client_httpx_args(),
@@ -374,6 +398,9 @@ async def _build_real_adapters(
                     token_store, http_client, base_url=resolved.base_url
                 )
                 adapter.set_endpoints(await _resolve_endpoints(directory, bank_id))
+                adapter.configure_payment_jwks_resolver(
+                    _payment_jwks_resolver(directory, bank_id)
+                )
                 adapter.configure_generated_clients(
                     timeout=httpx.Timeout(settings.http_timeout_seconds),
                     httpx_args=_generated_client_httpx_args(),
@@ -393,7 +420,10 @@ async def _build_real_adapters(
             token_endpoint=token_endpoint,
         )
         endpoints = await _resolve_endpoints(directory, bank_id)
-        adapter.set_endpoints(endpoints)
+        adapter.set_endpoints(endpoints, fail_closed=True)
+        adapter.configure_payment_jwks_resolver(
+            _payment_jwks_resolver(directory, bank_id)
+        )
         adapter.configure_generated_clients(
             timeout=httpx.Timeout(settings.http_timeout_seconds),
             httpx_args=_generated_client_httpx_args(),

@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from openfinance_br_mcp.auth.authorization_session import PendingAuthorization
 from openfinance_br_mcp.auth.consent import CONSENT_SCOPE_MAP
 from openfinance_br_mcp.auth.id_token import verify_id_token
+from openfinance_br_mcp.auth.mcp_principal import principal_from_access_token
 from openfinance_br_mcp.auth.par import push_authorization_request
 from openfinance_br_mcp.auth.pkce import PKCEChallenge
 from openfinance_br_mcp.auth.token import TokenResponse
@@ -324,7 +325,7 @@ async def complete_consent(
     # is None) - see that module's docstring for why that's safe.
     access_token = get_access_token()
     if access_token is not None:
-        principal = access_token.client_id or access_token.subject or ""
+        principal = principal_from_access_token(access_token)
         await app.principal_bindings.bind(session.subject_id, principal)
 
     return CompleteConsentResult(

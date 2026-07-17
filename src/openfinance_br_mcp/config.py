@@ -16,6 +16,8 @@ from typing import Literal, Self
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from openfinance_br_mcp import __version__
+
 _SECRETS_DIR = "/app/secrets"
 
 
@@ -43,12 +45,12 @@ class Settings(BaseSettings):
             calls, or mTLS certificates required - the primary
             day-to-day dev loop, since the official sandbox is not
             self-service. 'sandbox'/'production' resolve real bank
-            endpoints via DirectoryClient and require client_id/
-            client_secret.
+            endpoints via DirectoryClient and require client_id plus
+            private_key_jwt signing material.
         client_id: Client ID registered with the participating
             institution. Required unless environment='mock'.
-        client_secret: Corresponding client secret. Required unless
-            environment='mock'.
+        client_secret: Optional legacy credential. The implemented FAPI
+            flows use ``private_key_jwt`` and do not consume this value.
         mtls_cert_path: Path to the client mTLS certificate.
         mtls_key_path: Path to the client mTLS private key.
         private_key_path: Path to the RSA private key used for
@@ -134,7 +136,7 @@ class Settings(BaseSettings):
 
     # Server
     server_name: str = Field(default="openfinance-br-mcp")
-    server_version: str = Field(default="0.1.0")
+    server_version: str = Field(default=__version__)
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="json")
 
@@ -155,7 +157,11 @@ class Settings(BaseSettings):
         default=None, description="Client ID registered with the institution"
     )
     client_secret: SecretStr | None = Field(
-        default=None, description="Corresponding client secret"
+        default=None,
+        description=(
+            "Optional legacy client secret. Current FAPI flows authenticate "
+            "with private_key_jwt and do not use this value."
+        ),
     )
 
     # mTLS (transport/channel-level, per the separate BCB certificate
@@ -372,7 +378,13 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("client_id", "client_secret", mode="before")
+    @field_validator(
+        "client_id",
+        "client_secret",
+        "private_key_path",
+        "private_key_kid",
+        mode="before",
+    )
     @classmethod
     def empty_bank_credentials_are_unset(cls, v: object) -> object:
         """Treat empty optional bank credentials as missing values.
@@ -386,22 +398,36 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_credentials_required_outside_mock(self) -> Self:
-        """Requires client_id/client_secret unless running in mock mode.
+        """Requires the credentials actually consumed by FAPI flows.
 
         Returns:
             The validated Settings instance.
 
         Raises:
-            ValueError: If environment is 'sandbox'/'production' but
-                client_id or client_secret is missing.
+            ValueError: If a non-mock environment lacks client_id or
+                private_key_jwt signing material.
         """
         if self.environment != "mock" and (
-            self.client_id is None or self.client_secret is None
+            self.client_id is None
+            or self.private_key_path is None
+            or self.private_key_kid is None
         ):
             raise ValueError(
-                "client_id and client_secret are required when "
-                f"environment='{self.environment}' (only environment='mock' "
-                "can run without real credentials)"
+                "client_id, private_key_path, and private_key_kid are required "
+                f"when environment='{self.environment}' (the implemented FAPI "
+                "flows use private_key_jwt, not client_secret)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_production_directory_is_fail_closed(self) -> Self:
+        """Forbids stale hardcoded endpoint fallback in production."""
+        if (
+            self.environment == "production"
+            and self.directory_fallback_mode != "fail_closed"
+        ):
+            raise ValueError(
+                "directory_fallback_mode must be 'fail_closed' in production"
             )
         return self
 
@@ -464,6 +490,18 @@ class Settings(BaseSettings):
                 "address - serving the HTTP transport on a network-"
                 "reachable host with no MCP client authentication would "
                 "let any caller invoke every tool unauthenticated."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_origin_allowlist_outside_loopback(self) -> Self:
+        """Requires DNS-rebinding Origin protection on remote HTTP binds."""
+        is_http = self.mcp_transport == "streamable-http"
+        is_loopback = self.mcp_http_host in ("127.0.0.1", "localhost", "::1")
+        if is_http and not is_loopback and not self.mcp_http_allowed_origins:
+            raise ValueError(
+                "mcp_http_allowed_origins is required when streamable-http "
+                "binds to a non-loopback host"
             )
         return self
 

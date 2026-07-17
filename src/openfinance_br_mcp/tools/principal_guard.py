@@ -28,6 +28,7 @@ from typing import Any
 import structlog
 from mcp.server.auth.middleware.auth_context import get_access_token
 
+from openfinance_br_mcp.auth.mcp_principal import principal_from_access_token
 from openfinance_br_mcp.exceptions import ValidationError
 
 log = structlog.get_logger(__name__)
@@ -70,7 +71,7 @@ def require_principal_binding[**P, T](
             # decorator applied out of scope.
             return await fn(*args, **kwargs)
 
-        principal = access_token.client_id or access_token.subject or ""
+        principal = principal_from_access_token(access_token)
         app = ctx.request_context.lifespan_context
         if not await app.principal_bindings.is_bound(subject_id, principal):
             log.warning(

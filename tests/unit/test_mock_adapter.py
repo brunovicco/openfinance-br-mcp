@@ -81,7 +81,7 @@ class TestMockOpenFinanceAdapter:
         self, adapter: MockOpenFinanceAdapter
     ) -> None:
         request = PixPaymentRequest(
-            amount="150.00",  # type: ignore[arg-type]
+            amount="150.00",
             creditor_key="someone@example.com",
             creditor_key_type=PixKeyType.EMAIL,
             debtor_account_id="any-account-id",

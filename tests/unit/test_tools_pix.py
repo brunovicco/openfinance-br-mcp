@@ -12,7 +12,10 @@ import pytest
 
 from openfinance_br_mcp.adapters.mock_adapter import MockOpenFinanceAdapter
 from openfinance_br_mcp.auth.idempotency_store import IdempotencyStore
-from openfinance_br_mcp.auth.payment_consent import PaymentConsentStatus
+from openfinance_br_mcp.auth.payment_consent import (
+    PaymentConsentStatus,
+    payment_token_purpose,
+)
 from openfinance_br_mcp.auth.token import TokenResponse, TokenStore
 from openfinance_br_mcp.context import AppContext
 from openfinance_br_mcp.exceptions import ConsentError, ValidationError
@@ -85,7 +88,7 @@ class TestInitiatePixMockMode:
         result = await inspect.unwrap(initiate_pix)(
             SUBJECT_ID,
             "nubank",
-            150.00,
+            "150.00",
             "recipient@example.com",
             PixKeyType.EMAIL,
             "acc-1",
@@ -104,7 +107,7 @@ class TestInitiatePixMockMode:
             await inspect.unwrap(initiate_pix)(
                 SUBJECT_ID,
                 "nubank",
-                150.00,
+                "150.00",
                 "recipient@example.com",
                 PixKeyType.EMAIL,
                 "acc-1",
@@ -123,7 +126,7 @@ class TestInitiatePixMockMode:
         args = (
             SUBJECT_ID,
             "nubank",
-            150.00,
+            "150.00",
             "recipient@example.com",
             PixKeyType.EMAIL,
             "acc-1",
@@ -147,7 +150,7 @@ class TestInitiatePixMockMode:
         await inspect.unwrap(initiate_pix)(
             SUBJECT_ID,
             "nubank",
-            150.00,
+            "150.00",
             "recipient@example.com",
             PixKeyType.EMAIL,
             "acc-1",
@@ -159,7 +162,7 @@ class TestInitiatePixMockMode:
             await inspect.unwrap(initiate_pix)(
                 SUBJECT_ID,
                 "nubank",
-                999.00,
+                "999.00",
                 "someone-else@example.com",
                 PixKeyType.EMAIL,
                 "acc-1",
@@ -169,18 +172,29 @@ class TestInitiatePixMockMode:
 
 
 class _FakeResolvedApi:
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, api_family_type: str) -> None:
         self.base_url = base_url
+        self.api_family_type = api_family_type
+        self.api_version = "5.0.0"
+
+    def require_collection_endpoint(self, path_suffix: str) -> str:
+        return f"{self.base_url}/payments/v5{path_suffix}"
 
 
 class _FakeDirectory:
     """Minimal stand-in for DirectoryClient's methods initiate_pix calls."""
 
     async def resolve(self, bank_id: str, api_family_type: str) -> _FakeResolvedApi:
-        return _FakeResolvedApi(base_url=f"https://{bank_id}.example.com/open-banking")
+        return _FakeResolvedApi(
+            base_url=f"https://{bank_id}.example.com/open-banking",
+            api_family_type=api_family_type,
+        )
 
     async def resolve_token_endpoint(self, bank_id: str) -> str:
         return f"https://{bank_id}.example.com/token"
+
+    async def resolve_jwks(self, bank_id: str) -> dict[str, object]:
+        return {"keys": []}
 
 
 class TestInitiatePixRealMode:
@@ -199,12 +213,13 @@ class TestInitiatePixRealMode:
             await inspect.unwrap(initiate_pix)(
                 SUBJECT_ID,
                 "nubank",
-                150.00,
+                "150.00",
                 "recipient@example.com",
                 PixKeyType.EMAIL,
                 "acc-1",
                 "idem-key-5",
                 _fake_ctx(app),
+                consent_id="urn:bank:PC1",
             )
 
     @pytest.mark.asyncio
@@ -214,7 +229,7 @@ class TestInitiatePixRealMode:
             "nubank",
             SUBJECT_ID,
             TokenResponse({"access_token": "payment-token", "expires_in": 300}),
-            purpose="payment",
+            purpose=payment_token_purpose("urn:bank:PC1"),
         )
         payment_consent_manager = AsyncMock()
         payment_consent_manager.get_status.return_value = (
@@ -231,12 +246,13 @@ class TestInitiatePixRealMode:
             await inspect.unwrap(initiate_pix)(
                 SUBJECT_ID,
                 "nubank",
-                150.00,
+                "150.00",
                 "recipient@example.com",
                 PixKeyType.EMAIL,
                 "acc-1",
                 "idem-key-6",
                 _fake_ctx(app),
+                consent_id="urn:bank:PC1",
             )
 
     @pytest.mark.asyncio
@@ -246,7 +262,7 @@ class TestInitiatePixRealMode:
             "nubank",
             SUBJECT_ID,
             TokenResponse({"access_token": "payment-token", "expires_in": 300}),
-            purpose="payment",
+            purpose=payment_token_purpose("urn:bank:PC1"),
         )
         payment_consent_manager = AsyncMock()
         payment_consent_manager.get_status.return_value = (
@@ -262,15 +278,17 @@ class TestInitiatePixRealMode:
         result = await inspect.unwrap(initiate_pix)(
             SUBJECT_ID,
             "nubank",
-            150.00,
+            "150.00",
             "recipient@example.com",
             PixKeyType.EMAIL,
             "acc-1",
             "idem-key-7",
             _fake_ctx(app),
+            consent_id="urn:bank:PC1",
         )
 
         assert result.bank == "nubank"
         payment_consent_manager.mark_consumed.assert_awaited_once_with(
-            "nubank", SUBJECT_ID
+            "nubank", SUBJECT_ID, "urn:bank:PC1"
         )
+        payment_consent_manager.reserve_payment.assert_awaited_once()

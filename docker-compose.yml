@@ -16,9 +16,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-console}
       # Optional in the default mock environment; config.py requires
-      # non-empty values automatically in sandbox/production.
+      # client ID and private_key_jwt material in sandbox/production.
       CLIENT_ID: ${CLIENT_ID:-}
-      CLIENT_SECRET: ${CLIENT_SECRET:-}
+      PRIVATE_KEY_PATH: ${PRIVATE_KEY_PATH:-}
+      PRIVATE_KEY_KID: ${PRIVATE_KEY_KID:-}
       MTLS_ENABLED: ${MTLS_ENABLED:-false}
       REDIRECT_URI: ${REDIRECT_URI:-https://localhost:8080/callback}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -57,8 +58,6 @@ services:
     command: >
       sh -c "uv run pytest tests/ -v --tb=short"
     environment:
-      CLIENT_ID: test_client_id
-      CLIENT_SECRET: test_client_secret
       MTLS_ENABLED: "false"
     profiles:
       - test

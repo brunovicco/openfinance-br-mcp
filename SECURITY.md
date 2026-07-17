@@ -13,14 +13,14 @@ or real bank data.
 The default `ENVIRONMENT=mock` runs entirely in-memory with no real
 credentials, no network calls, and no mTLS certificates - this is the
 safe way to explore the project. `sandbox`/`production` environments
-require real `CLIENT_ID`/`CLIENT_SECRET`/mTLS material issued by a
+require real `CLIENT_ID`/`PRIVATE_KEY_PATH`/mTLS material issued by a
 participating institution; treat those exactly as you would any other
 production banking credential.
 
 ## Supported versions
 
-This project is pre-1.0 (currently `0.1.x`). There is no LTS branch -
-security fixes land on `master` and the latest tagged release only.
+This project is pre-1.0 (currently `0.2.x`). There is no LTS branch -
+security fixes land on `main` and the latest tagged release only.
 
 ## Reporting a vulnerability
 

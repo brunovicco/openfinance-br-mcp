@@ -4,13 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openfinance-br-mcp"
-version = "0.1.0"
-description = "MCP server exposing Brazilian Open Finance (Banco Central do Brasil) APIs as tools for Claude"
+version = "0.2.0"
+description = "Experimental MCP server for Open Finance Brasil with typed tools and secure consent flows"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Bruno Vicco" }]
-requires-python = ">=3.12"
-keywords = ["mcp", "open-finance", "brasil", "bcb", "banking", "anthropic"]
+requires-python = ">=3.12,<3.14"
+keywords = ["mcp", "model-context-protocol", "open-finance", "brasil", "bcb", "banking", "fapi", "pix"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+]
 dependencies = [
     "mcp>=1.27,<2",
     "httpx[http2]>=0.27.0",
@@ -43,10 +50,17 @@ dev = [
     "pytest-cov>=5.0.0",
     "types-jwcrypto>=1.5.0",
     "httpx2>=2.5.0",
+    "twine==6.2.0",
 ]
 
 [project.scripts]
 openfinance-mcp = "openfinance_br_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/brunovicco/openfinance-br-mcp"
+Repository = "https://github.com/brunovicco/openfinance-br-mcp"
+Issues = "https://github.com/brunovicco/openfinance-br-mcp/issues"
+Changelog = "https://github.com/brunovicco/openfinance-br-mcp/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openfinance_br_mcp", "clients"]

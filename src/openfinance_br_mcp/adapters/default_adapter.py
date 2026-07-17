@@ -14,6 +14,7 @@ Example:
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from datetime import date as dt_date
 from decimal import Decimal
@@ -145,9 +146,10 @@ from openfinance_br_mcp.adapters.base import (
     build_fapi_call_kwargs,
     build_fapi_headers,
 )
+from openfinance_br_mcp.auth.payment_consent import payment_token_purpose
 from openfinance_br_mcp.auth.payment_jws import (
-    decode_payment_response_unverified,
     sign_payment_payload,
+    verify_payment_response,
 )
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.exceptions import BankAdapterError
@@ -197,7 +199,6 @@ log = structlog.get_logger(__name__)
 _FAMILY_VERSIONS: dict[str, str] = {
     "accounts": "v2",
     "credit-cards-accounts": "v2",
-    "payments": "v4",
     "consents": "v3",
     "bank-fixed-incomes": "v1",
     "funds": "v1",
@@ -233,6 +234,10 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         self._base_url = base_url
         self._token_endpoint = token_endpoint
         self._endpoints = BankEndpoints()
+        self._fail_closed_endpoints = False
+        self._payment_jwks_resolver: Callable[[], Awaitable[dict[str, Any]]] | None = (
+            None
+        )
         # Lazily-built, per-family generated clients - see
         # _generated_client for why these can't just reuse self._http.
         self._generated_clients: dict[str, Any] = {}
@@ -276,7 +281,9 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         self._generated_client_httpx_args = httpx_args
         self._generated_clients.clear()
 
-    def set_endpoints(self, endpoints: BankEndpoints) -> None:
+    def set_endpoints(
+        self, endpoints: BankEndpoints, *, fail_closed: bool = False
+    ) -> None:
         """Overrides per-API-family base URLs resolved via the Directory.
 
         Each Open Finance Brasil API family (accounts,
@@ -293,20 +300,24 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         resolved.
 
         Args:
-            endpoints: Typed catalog of resolved base URLs (see
-                ``adapters/base.py::BankEndpoints`` - each field is the
-                bare '/open-banking'-prefixed URL the Directory
-                returns; ``_client_base_url`` appends the family +
-                version segment on top of it). A family absent from
-                this catalog falls back to ``self.base_url`` (see
-                ``_url_for``).
+            endpoints: Typed catalog of resolved family URLs.
+            fail_closed: Reject a missing family instead of falling back
+                to the adapter's default Accounts host. Enabled for every
+                normal sandbox/production adapter.
 
         Resets the per-family generated-client cache (see
         ``_generated_client``): any client built from the old catalog
         would otherwise keep pointing at a stale base_url.
         """
         self._endpoints = endpoints
+        self._fail_closed_endpoints = fail_closed
         self._generated_clients.clear()
+
+    def configure_payment_jwks_resolver(
+        self, resolver: Callable[[], Awaitable[dict[str, Any]]]
+    ) -> None:
+        """Injects the bank-JWKS resolver used for payment responses."""
+        self._payment_jwks_resolver = resolver
 
     def _url_for(self, api_family_type: str) -> str:
         """Returns the base URL to use for a given API family.
@@ -324,7 +335,16 @@ class DefaultOpenFinanceAdapter(BankAdapter):
             e.g. in mock mode or when the Directory doesn't publish
             that family for this bank).
         """
-        return self._endpoints.get_or(api_family_type, self._base_url)
+        resolved = self._endpoints.get(api_family_type)
+        if resolved is not None:
+            return resolved
+        if self._fail_closed_endpoints:
+            raise BankAdapterError(
+                f"{self.bank_id}: API family '{api_family_type}' is unavailable",
+                bank_id=self.bank_id,
+                code="API_FAMILY_UNAVAILABLE",
+            )
+        return self._base_url
 
     def _client_base_url(self, api_family_type: str) -> str:
         """Returns the fully-versioned base URL a generated client needs.
@@ -877,8 +897,9 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         ``IdempotencyStore`` (auth/idempotency_store.py); this header
         is kept as a defense-in-depth signal to the bank's own API.
 
-        Fetches a ``purpose='payment'`` token - never the data-sharing
-        token ``get_accounts``/``list_transactions``/etc. use - since
+        Fetches a per-consent ``purpose='payment:<consent_id>'`` token -
+        never the data-sharing token ``get_accounts``/
+        ``list_transactions``/etc. use - since
         the Payments API requires its own dedicated consent (see
         auth/payment_consent.py, tools/payments.py). The request body
         is additionally signed as a JWS (auth/payment_jws.py) per the
@@ -893,13 +914,10 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         documented in payment_jws.py's module docstring; some bank
         registrations may instead expect the JWS as a header alongside
         a plain JSON body, so confirm against the specific
-        institution's OpenAPI spec before relying on a live environment. The response
-        body is also a JWS (per the official spec, not plain JSON - a
-        real ``response.json()`` call here would fail against a live
-        bank), decoded via ``decode_payment_response_unverified``;
-        verifying its signature against the bank's JWKS is
-        deliberately deferred because this adapter has no DirectoryClient
-        reference from which to fetch it.
+        institution's OpenAPI spec before relying on a live environment.
+        The response body is verified as a JWS against the institution
+        JWKS resolved from the Directory; a missing resolver or invalid
+        signature fails closed before any payment identifier is trusted.
 
         Args:
             subject_id: ID of the paying user.
@@ -911,7 +929,29 @@ class DefaultOpenFinanceAdapter(BankAdapter):
         Raises:
             BankAdapterError: On an HTTP failure.
         """
-        token = await self._get_token(subject_id, purpose="payment")
+        if request.consent_id is None:
+            raise BankAdapterError(
+                f"{self.bank_id}: consent_id is required for a real PIX payment",
+                bank_id=self.bank_id,
+                code="PAYMENT_CONSENT_ID_REQUIRED",
+            )
+        payment_endpoint = self._endpoints.get("payments-pix")
+        if payment_endpoint is None:
+            raise BankAdapterError(
+                f"{self.bank_id}: payments-pix endpoint is unavailable",
+                bank_id=self.bank_id,
+                code="API_FAMILY_UNAVAILABLE",
+            )
+        if self._payment_jwks_resolver is None:
+            raise BankAdapterError(
+                f"{self.bank_id}: payment response verifier is not configured",
+                bank_id=self.bank_id,
+                code="PAYMENT_RESPONSE_VERIFIER_UNAVAILABLE",
+            )
+
+        token = await self._get_token(
+            subject_id, purpose=payment_token_purpose(request.consent_id)
+        )
         payload = {
             "data": {
                 "localInstrument": "DICT",
@@ -925,13 +965,14 @@ class DefaultOpenFinanceAdapter(BankAdapter):
                 },
                 "debtorAccount": {"accountId": request.debtor_account_id},
                 "remittanceInformation": request.description,
+                "consentId": request.consent_id,
             }
         }
         signed_payload = sign_payment_payload(payload)
 
         try:
             response = await self._http.post(
-                f"{self._url_for('payments')}/payments/v4/pix/payments",
+                payment_endpoint,
                 content=signed_payload,
                 headers={
                     **build_fapi_headers(token),
@@ -947,7 +988,8 @@ class DefaultOpenFinanceAdapter(BankAdapter):
                 status_code=exc.response.status_code,
             ) from exc
 
-        raw = decode_payment_response_unverified(response.text).get("data", {})
+        response_jwks = await self._payment_jwks_resolver()
+        raw = verify_payment_response(response.text, jwks=response_jwks).get("data", {})
         return PixPayment(
             payment_id=raw["paymentId"],
             status=PixPaymentStatus(raw.get("status", "PDNG")),

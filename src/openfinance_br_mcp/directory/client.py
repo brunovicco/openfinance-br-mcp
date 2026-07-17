@@ -18,6 +18,7 @@ Example:
 """
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -71,6 +72,20 @@ def _base_url_from_endpoint(endpoint: str) -> str:
             code="UNEXPECTED_ENDPOINT_SHAPE",
         )
     return endpoint[: index + len(marker) - 1]
+
+
+def _version_key(version: str) -> tuple[int, int, int, int]:
+    """Builds a sortable key for Directory semantic-version strings.
+
+    Stable releases sort after prereleases carrying the same numeric
+    version. Unknown shapes remain resolvable but sort below a valid
+    semantic version.
+    """
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(.*)$", version)
+    if match is None:
+        return (0, 0, 0, 0)
+    major, minor, patch, suffix = match.groups()
+    return (int(major), int(minor), int(patch), 1 if not suffix else 0)
 
 
 class DirectoryClient:
@@ -184,10 +199,8 @@ class DirectoryClient:
         Args:
             bank_id: Identifier used by this project's adapters (e.g. 'nubank').
             api_family_type: Directory ApiFamilyType to resolve (e.g.
-                'accounts', 'consents', 'payments' - payment consents and
-                PIX initiation are both under the single 'payments'
-                family, there is no separate 'payments-consents'/
-                'payments-pix' family).
+                'accounts', 'consents', 'payments-consents',
+                'payments-pix').
 
         Returns:
             ResolvedApi with the base URL and issuer to use.
@@ -198,25 +211,43 @@ class DirectoryClient:
                 endpoint.
         """
         org = await self._find_organisation(bank_id)
+        candidates: list[ResolvedApi] = []
+
+        if org.Status not in (None, _AVAILABLE_STATUS):
+            raise DirectoryError(
+                f"Organisation for bank '{bank_id}' is not active",
+                bank_id=bank_id,
+                code="ORGANISATION_NOT_ACTIVE",
+            )
 
         for auth_server in org.AuthorisationServers:
+            if auth_server.Status not in (None, _AVAILABLE_STATUS):
+                continue
             for api_resource in auth_server.ApiResources:
                 if (
-                    api_resource.ApiFamilyType == api_family_type
-                    and api_resource.Status == _AVAILABLE_STATUS
-                    and api_resource.ApiDiscoveryEndpoints
+                    api_resource.ApiFamilyType != api_family_type
+                    or api_resource.Status != _AVAILABLE_STATUS
+                    or not api_resource.ApiDiscoveryEndpoints
                 ):
-                    base_url = _base_url_from_endpoint(
-                        api_resource.ApiDiscoveryEndpoints[0].ApiEndpoint
-                    )
-                    return ResolvedApi(
+                    continue
+                api_endpoints = [
+                    endpoint.ApiEndpoint
+                    for endpoint in api_resource.ApiDiscoveryEndpoints
+                ]
+                candidates.append(
+                    ResolvedApi(
                         bank_id=bank_id,
                         api_family_type=api_family_type,
                         api_version=api_resource.ApiVersion,
-                        base_url=base_url,
+                        base_url=_base_url_from_endpoint(api_endpoints[0]),
                         issuer=auth_server.Issuer,
-                        openid_discovery_document=auth_server.OpenIDDiscoveryDocument,
+                        openid_discovery_document=(auth_server.OpenIDDiscoveryDocument),
+                        api_endpoints=api_endpoints,
                     )
+                )
+
+        if candidates:
+            return max(candidates, key=lambda item: _version_key(item.api_version))
 
         raise DirectoryError(
             f"No available '{api_family_type}' API found for bank '{bank_id}'",

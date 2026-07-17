@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.brunovicco/openfinance-br-mcp",
-  "description": "Open Finance Brasil MCP server with typed tools, resources, prompts, OAuth-protected Streamable HTTP, and a credential-free mock mode",
+  "description": "Secure Open Finance Brasil MCP server with typed tools and a credential-free mock mode",
   "repository": {
     "url": "https://github.com/brunovicco/openfinance-br-mcp",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "openfinance-br-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -34,8 +34,36 @@
           "format": "string"
         },
         {
-          "name": "CLIENT_SECRET",
-          "description": "Client secret corresponding to CLIENT_ID. Required unless ENVIRONMENT=mock",
+          "name": "PRIVATE_KEY_PATH",
+          "description": "Path to the RSA private key used for private_key_jwt and JAR signing outside mock mode",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "PRIVATE_KEY_KID",
+          "description": "Key ID matching the registered client JWKS entry outside mock mode",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "MTLS_CERT_PATH",
+          "description": "Path to the client mTLS certificate used outside mock mode",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "MTLS_KEY_PATH",
+          "description": "Path to the client mTLS private key used outside mock mode",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "REDIS_URL",
+          "description": "Optional Redis connection URL for persistent consent and token state",
           "isRequired": false,
           "isSecret": true,
           "format": "string"

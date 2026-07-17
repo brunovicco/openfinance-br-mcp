@@ -122,14 +122,10 @@ def _build_transport_security() -> TransportSecuritySettings | None:
         return None
 
     if not settings.mcp_http_allowed_origins:
-        log.warning(
-            "mcp_http_allowed_origins_empty",
-            detail=(
-                "Binding to a non-loopback host without MCP_HTTP_ALLOWED_ORIGINS "
-                "leaves DNS-rebinding protection disabled."
-            ),
+        raise ValueError(
+            "MCP_HTTP_ALLOWED_ORIGINS is mandatory when Streamable HTTP "
+            "binds to a non-loopback host"
         )
-        return None
 
     # allowed_hosts is checked against the bare Host header (e.g.
     # 'your-domain.com'), while allowed_origins is checked against the

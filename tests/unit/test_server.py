@@ -59,13 +59,14 @@ class TestBuildTransportSecurity:
 
         assert _build_transport_security() is None
 
-    def test_returns_none_and_warns_for_non_loopback_without_origins(
+    def test_fails_closed_for_non_loopback_without_origins(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "mcp_http_host", "0.0.0.0")  # noqa: S104
         monkeypatch.setattr(settings, "mcp_http_allowed_origins", [])
 
-        assert _build_transport_security() is None
+        with pytest.raises(ValueError, match="MCP_HTTP_ALLOWED_ORIGINS"):
+            _build_transport_security()
 
     def test_returns_settings_for_non_loopback_with_origins(
         self, monkeypatch: pytest.MonkeyPatch

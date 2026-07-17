@@ -1,10 +1,10 @@
-[English](README.md) · **Português**
+[English](https://github.com/brunovicco/openfinance-br-mcp/blob/main/README.md) · **Português**
 
 # openfinance-br-mcp
 
 > MCP experimental para o **Open Finance Brasil**, com ambiente mock completo
 > e integração FAPI-BR em evolução. Não é certificado nem validado com
-> instituições reais; consulte [VALIDATION.md](VALIDATION.md) antes de usá-lo
+> instituições reais; consulte [VALIDATION.md](https://github.com/brunovicco/openfinance-br-mcp/blob/main/VALIDATION.md) antes de usá-lo
 > fora de `environment=mock`.
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://python.org)
@@ -31,9 +31,11 @@ Itaú, Santander, XP, PicPay e BTG Pactual com dados em memória e sem acesso à
 rede. São simulações, não integrações certificadas.
 
 Os adapters reais e a jornada da API de Pagamentos são experimentais e não
-validados. Pagamentos usam consentimento dedicado, PAR/JAR, JWS e idempotência
-persistente. `list_pix_keys` é uma extensão demonstrativa, não um endpoint
-padronizado pelo Open Finance Brasil. Consulte [VALIDATION.md](VALIDATION.md)
+validados. Pagamentos usam as famílias v5 `payments-consents`/`payments-pix`,
+token por consentimento, verificação JWS das respostas, PAR/JAR, vínculo do
+payload ao consentimento e idempotência persistente. `list_pix_keys` é uma
+extensão demonstrativa, não um endpoint padronizado pelo Open Finance Brasil.
+Consulte [VALIDATION.md](https://github.com/brunovicco/openfinance-br-mcp/blob/main/VALIDATION.md)
 para o escopo exato.
 
 ## Tools MCP disponíveis
@@ -58,11 +60,17 @@ fluxos de autorização.
 
 ### Pré-requisitos
 
-- Python 3.12+
+- Python 3.12 ou 3.13
 - [uv](https://github.com/astral-sh/uv) instalado
 
 ```bash
-# Clone o repositório
+# Execute a release publicada no modo mock, sem credenciais
+uvx --from openfinance-br-mcp==0.2.0 openfinance-mcp
+```
+
+### A partir do código-fonte
+
+```bash
 git clone https://github.com/brunovicco/openfinance-br-mcp.git
 cd openfinance-br-mcp
 
@@ -84,8 +92,8 @@ Adicione ao `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "openfinance-br": {
-      "command": "uv",
-      "args": ["run", "--directory", "/caminho/para/openfinance-br-mcp", "openfinance-mcp"]
+      "command": "uvx",
+      "args": ["--from", "openfinance-br-mcp==0.2.0", "openfinance-mcp"]
     }
   }
 }
@@ -131,7 +139,7 @@ openfinance-br-mcp (MCP Server)
   ├── Auth + Consent  (FAPI-BR 2.2.0: private_key_jwt, PAR/JAR, PKCE, mTLS)
   ├── MCP Primitives  (18 tools + 1 resource + 1 prompt)
   │   ├── Schemas de entrada/saída gerados por Pydantic v2
-  │   └── URL elicitation opcional para autorização bancária
+  │   ├── URL elicitation opcional para autorização bancária
   │   └── Categorizer (DSPy + Claude para classificar transações)
   ├── Bank Adapters   (10 bancos - extensível)
   └── Directory Client (resolve os endpoints reais dos bancos via o
@@ -150,27 +158,30 @@ Open Finance BR (BCB) - Diretório de Participantes
 |----------|-------------|-----------|
 | `ENVIRONMENT` | ❌ | `mock` (padrão, sem credenciais necessárias), `sandbox` ou `production` |
 | `CLIENT_ID` | ⚠️ fora do mock | Client ID registrado na IF |
-| `CLIENT_SECRET` | ⚠️ fora do mock | Client secret |
 | `PRIVATE_KEY_PATH` | ⚠️ fora do mock | Chave RSA para assinatura `private_key_jwt`/JAR |
+| `PRIVATE_KEY_KID` | ⚠️ fora do mock | `kid` correspondente ao JWKS registrado |
 | `MTLS_CERT_PATH` | ⚠️ prod | Caminho do certificado mTLS |
 | `MTLS_KEY_PATH` | ⚠️ prod | Chave privada mTLS |
 | `ANTHROPIC_API_KEY` | ⚠️ DSPy | Necessário para `categorize=true` |
 | `REDIS_URL` | ❌ | Compartilha estado de TokenStore/ConsentManager entre réplicas |
 | `MCP_TRANSPORT` | ❌ | `stdio` (padrão) ou `streamable-http` |
+| `MCP_HTTP_ALLOWED_ORIGINS` | ⚠️ HTTP remoto | Allowlist obrigatória fora de loopback |
 | `LANGFUSE_OTLP_ENDPOINT` | ❌ | Ativa tracing para o Langfuse (com `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`) |
 | `LOG_LEVEL` | ❌ | INFO, DEBUG, WARNING (padrão: INFO) |
 | `LOG_FORMAT` | ❌ | json ou console (padrão: json) |
 
-Veja `.env.example` para a lista completa.
+Veja [`.env.example`](https://github.com/brunovicco/openfinance-br-mcp/blob/main/.env.example)
+para a lista completa.
 
 ## Documentação
 
-- [docs/pt/authorization.md](docs/pt/authorization.md) - os dois universos de token (autenticação do cliente MCP vs. autenticação bancária FAPI-BR), e por que eles nunca podem se cruzar
-- [CONTRIBUTING.md](CONTRIBUTING.md) - ambiente de desenvolvimento, CI e novos adapters (em inglês)
-- [SECURITY.md](SECURITY.md) - escopo, aviso e reporte de vulnerabilidades (em inglês)
-- [SOURCES.md](SOURCES.md) - especificações e RFCs adotadas (em inglês)
-- [VALIDATION.md](VALIDATION.md) - o que foi validado e quais são as limitações (em inglês)
-- [CHANGELOG.md](CHANGELOG.md) - histórico de releases (em inglês)
+- [Autorização](https://github.com/brunovicco/openfinance-br-mcp/blob/main/docs/pt/authorization.md) - os dois universos de token e por que eles nunca podem se cruzar
+- [Contribuição](https://github.com/brunovicco/openfinance-br-mcp/blob/main/CONTRIBUTING.md) - ambiente de desenvolvimento, CI e novos adapters (em inglês)
+- [Segurança](https://github.com/brunovicco/openfinance-br-mcp/blob/main/SECURITY.md) - escopo, aviso e reporte de vulnerabilidades (em inglês)
+- [Fontes](https://github.com/brunovicco/openfinance-br-mcp/blob/main/SOURCES.md) - especificações e RFCs adotadas (em inglês)
+- [Validação](https://github.com/brunovicco/openfinance-br-mcp/blob/main/VALIDATION.md) - escopo validado e limitações (em inglês)
+- [Changelog](https://github.com/brunovicco/openfinance-br-mcp/blob/main/CHANGELOG.md) - histórico de releases (em inglês)
+- [Release](https://github.com/brunovicco/openfinance-br-mcp/blob/main/RELEASING.md) - procedimento para mantenedores (em inglês)
 
 ## Licença
 

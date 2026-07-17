@@ -14,7 +14,7 @@ Sequence a caller drives through these tools:
      browser to authorize it.
   2. ``complete_payment_consent`` is called after the user finishes at
      the bank; it exchanges the code for a payment-bound access token
-     (saved under TokenStore's ``purpose='payment'`` namespace, never
+     (saved under a per-consent ``purpose='payment:<consent_id>'`` namespace, never
      colliding with a data-sharing token for the same subject/bank -
      see auth/token.py).
   3. ``check_payment_consent_status`` queries the consent's current
@@ -36,14 +36,20 @@ from pydantic import BaseModel
 
 from openfinance_br_mcp.auth.authorization_session import PendingAuthorization
 from openfinance_br_mcp.auth.id_token import verify_id_token
+from openfinance_br_mcp.auth.mcp_principal import principal_from_access_token
 from openfinance_br_mcp.auth.par import push_authorization_request
-from openfinance_br_mcp.auth.payment_consent import PaymentConsentStatus, PaymentDetails
+from openfinance_br_mcp.auth.payment_consent import (
+    PaymentConsentStatus,
+    PaymentDetails,
+    payment_token_purpose,
+)
 from openfinance_br_mcp.auth.pkce import PKCEChallenge
 from openfinance_br_mcp.auth.token_exchange import (
     exchange_authorization_code,
     exchange_client_credentials,
 )
 from openfinance_br_mcp.context import AppContext, AppRequestContext
+from openfinance_br_mcp.directory.models import ResolvedApi
 from openfinance_br_mcp.exceptions import (
     AuthenticationError,
     ConsentDeniedError,
@@ -51,7 +57,7 @@ from openfinance_br_mcp.exceptions import (
     ValidationError,
 )
 from openfinance_br_mcp.observability.tool_tracing import traced_tool
-from openfinance_br_mcp.schemas.pix import PixKeyType
+from openfinance_br_mcp.schemas.pix import CanonicalAmount, PixKeyType
 from openfinance_br_mcp.tools.aliases import BankId
 from openfinance_br_mcp.tools.errors import translate_errors
 from openfinance_br_mcp.tools.principal_guard import require_principal_binding
@@ -103,12 +109,23 @@ def _require_directory(app: AppContext) -> None:
         )
 
 
+def _require_payments_v5(resolved: ResolvedApi) -> None:
+    """Rejects obsolete payment-family registrations."""
+    if resolved.api_version.split(".", 1)[0] != "5":
+        raise ValidationError(
+            f"Bank '{resolved.bank_id}' publishes {resolved.api_family_type} "
+            f"version '{resolved.api_version}', but this journey requires "
+            "Payments API v5.",
+            code="UNSUPPORTED_PAYMENTS_VERSION",
+        )
+
+
 @traced_tool
 @translate_errors
 async def start_payment_consent(
     subject_id: str,
     bank: BankId,
-    amount: str,
+    amount: CanonicalAmount,
     creditor_key: str,
     creditor_key_type: PixKeyType,
     debtor_account_id: str,
@@ -147,7 +164,9 @@ async def start_payment_consent(
     _require_directory(app)
     assert app.directory is not None  # narrowed by _require_directory
 
-    resolved = await app.directory.resolve(bank, "payments")
+    resolved = await app.directory.resolve(bank, "payments-consents")
+    _require_payments_v5(resolved)
+    consent_endpoint = resolved.require_collection_endpoint("/consents")
     if resolved.issuer is None:
         raise ConsentError(
             f"No OAuth2/OIDC issuer resolved for bank '{bank}'",
@@ -168,12 +187,14 @@ async def start_payment_consent(
         debtor_account_id=debtor_account_id,
         description=description,
     )
+    response_jwks = await app.directory.resolve_jwks(bank)
     consent_id = await app.payment_consent_manager.create(
         bank,
         subject_id,
-        bank_base_url=resolved.base_url,
+        consent_endpoint=consent_endpoint,
         payment=payment,
         access_token=client_credentials_token.access_token,
+        response_jwks=response_jwks,
     )
 
     pkce = PKCEChallenge.generate()
@@ -190,7 +211,7 @@ async def start_payment_consent(
         par_result.state,
         PendingAuthorization(
             bank_id=bank,
-            bank_base_url=resolved.base_url,
+            bank_base_url=consent_endpoint,
             consent_id=consent_id,
             subject_id=subject_id,
             pkce=pkce,
@@ -287,19 +308,24 @@ async def complete_payment_consent(
     verify_id_token(id_token_raw, issuer=session.issuer, jwks=jwks, nonce=session.nonce)
 
     await app.token_store.save(
-        session.bank_id, session.subject_id, token, purpose="payment"
+        session.bank_id,
+        session.subject_id,
+        token,
+        purpose=payment_token_purpose(session.consent_id),
     )
 
     status = await app.payment_consent_manager.get_status(
         session.bank_id,
         session.subject_id,
-        bank_base_url=session.bank_base_url,
+        session.consent_id,
+        consent_endpoint=session.bank_base_url,
         access_token=token.access_token,
+        response_jwks=jwks,
     )
 
     access_token = get_access_token()
     if access_token is not None:
-        principal = access_token.client_id or access_token.subject or ""
+        principal = principal_from_access_token(access_token)
         await app.principal_bindings.bind(session.subject_id, principal)
 
     return CompletePaymentConsentResult(
@@ -314,13 +340,14 @@ async def complete_payment_consent(
 @translate_errors
 @require_principal_binding
 async def check_payment_consent_status(
-    subject_id: str, bank: BankId, ctx: AppRequestContext
+    subject_id: str, bank: BankId, consent_id: str, ctx: AppRequestContext
 ) -> PaymentConsentStatusResult:
-    """Checks the current status of a user's payment consent at a bank.
+    """Checks the current status of an exact payment consent journey.
 
     Args:
         subject_id: Payer's CPF or internal ID.
         bank: Identifier of the participating bank.
+        consent_id: Exact payment consent journey to query.
         ctx: MCP request context, providing access to shared dependencies.
 
     Returns:
@@ -330,11 +357,17 @@ async def check_payment_consent_status(
     _require_directory(app)
     assert app.directory is not None
 
-    resolved = await app.directory.resolve(bank, "payments")
+    resolved = await app.directory.resolve(bank, "payments-consents")
+    _require_payments_v5(resolved)
+    consent_endpoint = resolved.require_collection_endpoint("/consents")
     token_endpoint = await app.directory.resolve_token_endpoint(bank)
     try:
         token = await app.token_store.get_valid_token(
-            bank, subject_id, app.http_client, token_endpoint, purpose="payment"
+            bank,
+            subject_id,
+            app.http_client,
+            token_endpoint,
+            purpose=payment_token_purpose(consent_id),
         )
     except KeyError as exc:
         raise ConsentError(
@@ -347,7 +380,9 @@ async def check_payment_consent_status(
     status: PaymentConsentStatus = await app.payment_consent_manager.get_status(
         bank,
         subject_id,
-        bank_base_url=resolved.base_url,
+        consent_id,
+        consent_endpoint=consent_endpoint,
         access_token=token.access_token,
+        response_jwks=await app.directory.resolve_jwks(bank),
     )
     return PaymentConsentStatusResult(bank=bank, status=status.value)

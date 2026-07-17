@@ -21,5 +21,5 @@ Participating banks included:
     - BTG Pactual (ISPB: 30306294)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "openfinance-br-mcp contributors"

@@ -19,7 +19,10 @@ from jwcrypto import jwk
 from jwcrypto import jwt as jwcrypto_jwt
 
 from openfinance_br_mcp.auth.authorization_session import AuthorizationSessionStore
-from openfinance_br_mcp.auth.payment_consent import PaymentConsentManager
+from openfinance_br_mcp.auth.payment_consent import (
+    PaymentConsentManager,
+    payment_token_purpose,
+)
 from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
 from openfinance_br_mcp.auth.token import TokenStore
 from openfinance_br_mcp.config import settings
@@ -41,6 +44,7 @@ AUTHZ_ENDPOINT = "https://bank.example.com/api/pub/authorize"
 JWKS_URL = "https://bank.example.com/api/pub/jwks"
 DISCOVERY_URL = "https://bank.example.com/api/pub/.well-known/openid-configuration"
 PAYMENTS_BASE = "https://bank.example.com/open-banking"
+CONSENTS_URL = f"{PAYMENTS_BASE}/payments/v5/consents"
 SUBJECT_ID = "12345678900"
 
 
@@ -60,12 +64,10 @@ def _nubank_organisation() -> dict[str, object]:
                 "ApiResources": [
                     {
                         "ApiResourceId": "res-1",
-                        "ApiVersion": "1.0.0",
-                        "ApiFamilyType": "payments",
+                        "ApiVersion": "5.0.0",
+                        "ApiFamilyType": "payments-consents",
                         "Status": "Active",
-                        "ApiDiscoveryEndpoints": [
-                            {"ApiEndpoint": (f"{PAYMENTS_BASE}/payments/v4/consents")}
-                        ],
+                        "ApiDiscoveryEndpoints": [{"ApiEndpoint": CONSENTS_URL}],
                     }
                 ],
             }
@@ -127,6 +129,20 @@ def _issue_id_token(
     return str(outer.serialize())
 
 
+def _sign_bank_response(bank_key: jwk.JWK, payload: dict[str, object]) -> str:
+    token = jwcrypto_jwt.JWT(
+        header={"alg": "PS256", "kid": "bank-kid-1"}, claims=payload
+    )
+    token.make_signed_token(bank_key)
+    return str(token.serialize())
+
+
+def _client_jwks(public_key_pem: str) -> dict[str, object]:
+    key = jwk.JWK.from_pem(public_key_pem.encode())
+    key.update(kid="test-kid")
+    return {"keys": [json.loads(key.export_public())]}
+
+
 @pytest.fixture
 def http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient()
@@ -139,6 +155,7 @@ def _configured_client(
     monkeypatch.setattr(settings, "environment", "sandbox")
     monkeypatch.setattr(settings, "client_id", "test-client-id")
     monkeypatch.setattr(settings, "private_key_path", rsa_private_key_path)
+    monkeypatch.setattr(settings, "private_key_kid", "test-kid")
 
 
 def _app(
@@ -186,15 +203,18 @@ class TestStartPaymentConsent:
     @pytest.mark.asyncio
     @respx.mock
     async def test_creates_payment_consent_and_returns_par_authorization_url(
-        self, http_client: httpx.AsyncClient
+        self, http_client: httpx.AsyncClient, rsa_public_key_pem: str
     ) -> None:
         _mock_directory_and_discovery()
+        respx.get(JWKS_URL).mock(
+            return_value=httpx.Response(200, json=_client_jwks(rsa_public_key_pem))
+        )
         respx.post(TOKEN_ENDPOINT).mock(
             return_value=httpx.Response(
                 200, json={"access_token": "cc-token", "expires_in": 300}
             )
         )
-        respx.post(f"{PAYMENTS_BASE}/payments/v4/consents").mock(
+        respx.post(CONSENTS_URL).mock(
             return_value=httpx.Response(
                 201,
                 content=sign_payment_payload(
@@ -280,14 +300,6 @@ class TestCompletePaymentConsent:
         bank_key = jwk.JWK.generate(kty="RSA", size=2048, kid="bank-kid-1")
         jwks = {"keys": [json.loads(bank_key.export_public())]}
         respx.get(JWKS_URL).mock(return_value=httpx.Response(200, json=jwks))
-        respx.post(f"{PAYMENTS_BASE}/payments/v4/consents").mock(
-            return_value=httpx.Response(
-                201,
-                content=sign_payment_payload(
-                    {"data": {"consentId": "urn:bank:PC1", "status": "x"}}
-                ),
-            )
-        )
         respx.post(TOKEN_ENDPOINT).mock(
             return_value=httpx.Response(
                 200,
@@ -298,11 +310,17 @@ class TestCompletePaymentConsent:
                 },
             )
         )
-        respx.get(f"{PAYMENTS_BASE}/payments/v4/consents/urn:bank:PC1").mock(
+        respx.get(f"{CONSENTS_URL}/urn:bank:PC1").mock(
             return_value=httpx.Response(
                 200,
-                content=sign_payment_payload(
-                    {"data": {"consentId": "urn:bank:PC1", "status": "AUTHORISED"}}
+                content=_sign_bank_response(
+                    bank_key,
+                    {
+                        "data": {
+                            "consentId": "urn:bank:PC1",
+                            "status": "AUTHORISED",
+                        }
+                    },
                 ),
             )
         )
@@ -330,7 +348,7 @@ class TestCompletePaymentConsent:
             "state-1",
             PendingAuthorization(
                 bank_id="nubank",
-                bank_base_url=PAYMENTS_BASE,
+                bank_base_url=CONSENTS_URL,
                 consent_id="urn:bank:PC1",
                 subject_id=SUBJECT_ID,
                 pkce=pkce,
@@ -345,6 +363,7 @@ class TestCompletePaymentConsent:
         await app.payment_consent_manager._set_cached(
             "nubank",
             SUBJECT_ID,
+            "urn:bank:PC1",
             {
                 "data": {
                     "consentId": "urn:bank:PC1",
@@ -365,7 +384,11 @@ class TestCompletePaymentConsent:
 
         assert result.status == "AUTHORISED"
         saved = await token_store.get_valid_token(
-            "nubank", SUBJECT_ID, http_client, TOKEN_ENDPOINT, purpose="payment"
+            "nubank",
+            SUBJECT_ID,
+            http_client,
+            TOKEN_ENDPOINT,
+            purpose=payment_token_purpose("urn:bank:PC1"),
         )
         assert saved.access_token == "payment-token"  # noqa: S105
         with pytest.raises(KeyError):
@@ -388,5 +411,5 @@ class TestCheckPaymentConsentStatus:
             _mock_directory_and_discovery()
             with pytest.raises(Exception, match="No active payment consent session"):
                 await inspect.unwrap(check_payment_consent_status)(
-                    SUBJECT_ID, "nubank", _fake_ctx(app)
+                    SUBJECT_ID, "nubank", "urn:bank:PC1", _fake_ctx(app)
                 )

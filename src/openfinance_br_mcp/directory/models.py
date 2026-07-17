@@ -20,7 +20,11 @@ Example:
     '18236120'
 """
 
-from pydantic import BaseModel
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field
+
+from openfinance_br_mcp.exceptions import DirectoryError
 
 
 class ApiDiscoveryEndpoint(BaseModel):
@@ -42,12 +46,10 @@ class ApiResource(BaseModel):
     Attributes:
         ApiResourceId: Directory-internal identifier for this resource entry.
         ApiVersion: Semantic version of the certified API (e.g. '2.5.0').
-        ApiFamilyType: API family slug (e.g. 'accounts', 'payments',
-            'consents', 'resources', 'credit-cards-accounts'). 'payments'
-            covers both payment consents and PIX initiation - there is no
-            separate 'payments-consents'/'payments-pix' family in the
-            real Directory of Participants registry (verified directly
-            against github.com/OpenBanking-Brasil/openapi).
+        ApiFamilyType: API family slug (e.g. 'accounts',
+            'payments-consents', 'payments-pix', 'consents', 'resources',
+            'credit-cards-accounts'). Payment consent and PIX initiation
+            are registered as separate family types in the Directory.
         Status: 'Active' when the API is live and usable (verified
             against a live directory fetch); other values indicate it
             should not be resolved.
@@ -60,7 +62,7 @@ class ApiResource(BaseModel):
     ApiFamilyType: str
     Status: str | None = None
     CertificationStatus: str | None = None
-    ApiDiscoveryEndpoints: list[ApiDiscoveryEndpoint] = []
+    ApiDiscoveryEndpoints: list[ApiDiscoveryEndpoint] = Field(default_factory=list)
 
 
 class AuthorisationServer(BaseModel):
@@ -83,7 +85,7 @@ class AuthorisationServer(BaseModel):
     OpenIDDiscoveryDocument: str | None = None
     PayloadSigningCertLocationUri: str | None = None
     Status: str | None = None
-    ApiResources: list[ApiResource] = []
+    ApiResources: list[ApiResource] = Field(default_factory=list)
 
 
 class Organisation(BaseModel):
@@ -105,7 +107,7 @@ class Organisation(BaseModel):
     OrganisationName: str
     RegistrationId: str | None = None
     Status: str | None = None
-    AuthorisationServers: list[AuthorisationServer] = []
+    AuthorisationServers: list[AuthorisationServer] = Field(default_factory=list)
 
 
 class ResolvedApi(BaseModel):
@@ -123,6 +125,9 @@ class ResolvedApi(BaseModel):
             authorization server.
         openid_discovery_document: URL to fetch for the real
             token/authorization/PAR endpoints.
+        api_endpoints: Exact resource URLs published for this family.
+            Payment flows use these values directly instead of rebuilding
+            a URL from a host plus a locally-maintained version constant.
     """
 
     bank_id: str
@@ -131,3 +136,30 @@ class ResolvedApi(BaseModel):
     base_url: str
     issuer: str | None
     openid_discovery_document: str | None
+    api_endpoints: list[str] = Field(default_factory=list)
+
+    def require_collection_endpoint(self, path_suffix: str) -> str:
+        """Returns the exact collection endpoint matching ``path_suffix``.
+
+        Args:
+            path_suffix: Expected URL path suffix, for example
+                ``/consents`` or ``/pix/payments``.
+
+        Returns:
+            The exact URL published in ``ApiDiscoveryEndpoints``.
+
+        Raises:
+            DirectoryError: If this resolved family did not publish a
+                concrete collection endpoint with the requested suffix.
+        """
+        normalized_suffix = "/" + path_suffix.strip("/")
+        for endpoint in self.api_endpoints:
+            path = urlparse(endpoint).path.rstrip("/")
+            if "{" not in endpoint and path.endswith(normalized_suffix):
+                return endpoint.rstrip("/")
+        raise DirectoryError(
+            f"No collection endpoint ending in '{normalized_suffix}' was "
+            f"published for '{self.api_family_type}' at bank '{self.bank_id}'",
+            bank_id=self.bank_id,
+            code="API_ENDPOINT_NOT_FOUND",
+        )

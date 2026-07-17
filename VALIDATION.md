@@ -23,6 +23,10 @@ against the real sandbox and it worked."
   etc.) sign real tokens with real keys (via `jwcrypto`) and verify them
   through the actual production verification code path - the crypto
   itself is never mocked, only the HTTP calls around it (via `respx`).
+- **Payment safety invariants.** Tests cover exact v5 payment-family
+  resolution, signed-response verification, multiple concurrent consents,
+  consent/payment payload equality, and single-use reservation under a
+  persistent store. These are local contract tests, not bank certification.
 - **Mock-environment adapter.** `MockOpenFinanceAdapter` implements the
   same `BankAdapter` protocol every real adapter does, deterministically,
   in-memory. `tests/integration/` exercises full tool-call round trips
@@ -60,7 +64,7 @@ against the real sandbox and it worked."
 ## If you're evaluating this for real use
 
 Start in `mock`, read `docs/en/authorization.md` end to end, and treat
-anything past that point (real `CLIENT_ID`/`CLIENT_SECRET`, real mTLS
+anything past that point (real `CLIENT_ID`/`PRIVATE_KEY_PATH`, real mTLS
 certs, a real bank's production endpoint) as something you are
 responsible for validating yourself before relying on it with real
 financial data.

@@ -24,6 +24,7 @@ from openfinance_br_mcp.adapters.banco_do_brasil import (
     _BANCO_DO_BRASIL_BASE,
     BancoDoBrasilAdapter,
 )
+from openfinance_br_mcp.adapters.base import BankEndpoints
 from openfinance_br_mcp.adapters.bradesco import _BRADESCO_BASE, BradescoAdapter
 from openfinance_br_mcp.adapters.btg import _BTG_BASE, BTGAdapter
 from openfinance_br_mcp.adapters.caixa import _CAIXA_BASE, CaixaAdapter
@@ -33,6 +34,7 @@ from openfinance_br_mcp.adapters.picpay import _PICPAY_BASE, PicPayAdapter
 from openfinance_br_mcp.adapters.santander import _SANTANDER_BASE, SantanderAdapter
 from openfinance_br_mcp.adapters.sicoob import _SICOOB_BASE, SicoobAdapter
 from openfinance_br_mcp.adapters.xp import _XP_BASE, XPAdapter
+from openfinance_br_mcp.auth.payment_consent import payment_token_purpose
 from openfinance_br_mcp.auth.payment_jws import sign_payment_payload
 from openfinance_br_mcp.auth.token import TokenResponse, TokenStore
 from openfinance_br_mcp.config import settings
@@ -41,6 +43,7 @@ from openfinance_br_mcp.schemas.pix import PixKeyType, PixPaymentRequest
 from openfinance_br_mcp.schemas.transaction import TransactionFilters
 
 SUBJECT_ID = "12345678900"
+CONSENT_ID = "urn:bank:PC1"
 
 # Every generated model's 'links'/'meta' envelope is required and
 # strict about its own required fields (Links.self, Meta.totalRecords/
@@ -62,6 +65,23 @@ def _configure_private_key(
     this module goes through the same fixture, whether or not the
     individual test happens to call initiate_pix."""
     monkeypatch.setattr(settings, "private_key_path", rsa_private_key_path)
+    monkeypatch.setattr(settings, "private_key_kid", "test-kid")
+
+
+def _configure_payment_adapter(
+    adapter: object, base_url: str, public_key_pem: str
+) -> None:
+    key = jwk.JWK.from_pem(public_key_pem.encode())
+    key.update(kid="test-kid")
+    jwks = {"keys": [json.loads(key.export_public())]}
+
+    async def _resolve_jwks() -> dict[str, object]:
+        return jwks
+
+    adapter.set_endpoints(  # type: ignore[attr-defined]
+        BankEndpoints(payments_pix=f"{base_url}/payments/v5/pix/payments")
+    )
+    adapter.configure_payment_jwks_resolver(_resolve_jwks)  # type: ignore[attr-defined]
 
 
 ADAPTER_CASES = [
@@ -106,7 +126,7 @@ async def token_store() -> TokenStore:
             }
         )
         await store.save(bank_id, SUBJECT_ID, token)
-        # initiate_pix fetches a purpose='payment' token (see
+        # initiate_pix fetches a per-consent payment token (see
         # adapters/base.py._get_token), never the data-sharing one
         # above - save one here too so every parametrized bank's
         # initiate_pix test has something to find.
@@ -120,7 +140,7 @@ async def token_store() -> TokenStore:
                     "_obtained_at": datetime.now(UTC),
                 }
             ),
-            purpose="payment",
+            purpose=payment_token_purpose(CONSENT_ID),
         )
     return store
 
@@ -407,16 +427,17 @@ async def test_list_pix_keys_parses_response(
 @pytest.mark.asyncio
 @respx.mock
 async def test_initiate_pix_parses_response(
-    adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
+    adapter_cls: type,
+    base_url: str,
+    expected_bank_id: str,
+    token_store: TokenStore,
+    rsa_public_key_pem: str,
 ) -> None:
-    # The response body is a compact JWS, not plain JSON (P2 - see
-    # initiate_pix's docstring): plain JSON here would make
-    # decode_payment_response_unverified raise AuthenticationError
-    # ('Token format unrecognized'), confirmed by testing. Signed with
+    # The response body is a compact JWS, not plain JSON. Signed with
     # the same sign_payment_payload() production code uses, under the
     # test RSA key the _configure_private_key autouse fixture (above)
     # already points settings.private_key_path at.
-    respx.post(f"{base_url}/payments/v4/pix/payments").mock(
+    respx.post(f"{base_url}/payments/v5/pix/payments").mock(
         return_value=httpx.Response(
             201,
             content=sign_payment_payload(
@@ -425,12 +446,14 @@ async def test_initiate_pix_parses_response(
         )
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
+    _configure_payment_adapter(adapter, base_url, rsa_public_key_pem)
     request = PixPaymentRequest(
         amount=Decimal("50.00"),
         creditor_key="recipient@example.com",
         creditor_key_type=PixKeyType.EMAIL,
         debtor_account_id="acc-1",
         idempotency_key="idem-1",
+        consent_id=CONSENT_ID,
     )
 
     payment = await adapter.initiate_pix(SUBJECT_ID, request)
@@ -443,14 +466,14 @@ async def test_initiate_pix_parses_response(
 async def test_initiate_pix_sends_signed_jws_with_payment_purpose_token(
     token_store: TokenStore, rsa_public_key_pem: str
 ) -> None:
-    """initiate_pix must (1) use the purpose='payment' token, never the
+    """initiate_pix must (1) use the per-consent payment token, never the
     data-sharing one, and (2) sign the request body as a JWS
     (auth/payment_jws.py) rather than sending plain JSON - both required
     by the FAPI-BR Payments API profile (see P2 of the implementation
     plan)."""
     # See test_initiate_pix_parses_response above for why the response
     # must be a signed JWS, not plain JSON.
-    route = respx.post(f"{_NUBANK_BASE}/payments/v4/pix/payments").mock(
+    route = respx.post(f"{_NUBANK_BASE}/payments/v5/pix/payments").mock(
         return_value=httpx.Response(
             201,
             content=sign_payment_payload(
@@ -459,12 +482,14 @@ async def test_initiate_pix_sends_signed_jws_with_payment_purpose_token(
         )
     )
     adapter = NubankAdapter(token_store, httpx.AsyncClient())
+    _configure_payment_adapter(adapter, _NUBANK_BASE, rsa_public_key_pem)
     request = PixPaymentRequest(
         amount=Decimal("50.00"),
         creditor_key="recipient@example.com",
         creditor_key_type=PixKeyType.EMAIL,
         debtor_account_id="acc-1",
         idempotency_key="idem-1",
+        consent_id=CONSENT_ID,
     )
 
     await adapter.initiate_pix(SUBJECT_ID, request)
@@ -486,18 +511,24 @@ async def test_initiate_pix_sends_signed_jws_with_payment_purpose_token(
 @pytest.mark.asyncio
 @respx.mock
 async def test_initiate_pix_http_error_names_the_correct_bank(
-    adapter_cls: type, base_url: str, expected_bank_id: str, token_store: TokenStore
+    adapter_cls: type,
+    base_url: str,
+    expected_bank_id: str,
+    token_store: TokenStore,
+    rsa_public_key_pem: str,
 ) -> None:
-    respx.post(f"{base_url}/payments/v4/pix/payments").mock(
+    respx.post(f"{base_url}/payments/v5/pix/payments").mock(
         return_value=httpx.Response(500)
     )
     adapter = adapter_cls(token_store, httpx.AsyncClient())
+    _configure_payment_adapter(adapter, base_url, rsa_public_key_pem)
     request = PixPaymentRequest(
         amount=Decimal("50.00"),
         creditor_key="recipient@example.com",
         creditor_key_type=PixKeyType.EMAIL,
         debtor_account_id="acc-1",
         idempotency_key="idem-1",
+        consent_id=CONSENT_ID,
     )
 
     with pytest.raises(BankAdapterError, match=expected_bank_id) as exc_info:

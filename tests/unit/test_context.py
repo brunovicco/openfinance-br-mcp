@@ -107,7 +107,7 @@ class TestBuildRealAdapters:
         entirely, but this test's intent is specifically the *partial*
         fallback behavior (base_url from the directory, token_endpoint
         from the hardcoded default)."""
-        monkeypatch.setattr(settings, "environment", "production")
+        monkeypatch.setattr(settings, "environment", "sandbox")
         monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
         respx.get(f"{settings.bcb_directory_url}participants").mock(
             return_value=httpx.Response(
@@ -140,7 +140,7 @@ class TestBuildRealAdapters:
         being resolved via the directory, but token_endpoint never was -
         every adapter kept the hardcoded (unverified) guess even when a
         real OIDC discovery document was resolvable."""
-        monkeypatch.setattr(settings, "environment", "production")
+        monkeypatch.setattr(settings, "environment", "sandbox")
         respx.get(f"{settings.bcb_directory_url}participants").mock(
             return_value=httpx.Response(
                 200,
@@ -172,7 +172,7 @@ class TestBuildRealAdapters:
         crash server startup - with directory_fallback_mode explicitly
         set to 'hardcoded_fallback' (local-dev opt-in - see P0.6), it
         should fall back per-bank instead of excluding the bank."""
-        monkeypatch.setattr(settings, "environment", "production")
+        monkeypatch.setattr(settings, "environment", "sandbox")
         monkeypatch.setattr(settings, "directory_fallback_mode", "hardcoded_fallback")
         respx.get(f"{settings.bcb_directory_url}participants").mock(
             return_value=httpx.Response(200, json=[])

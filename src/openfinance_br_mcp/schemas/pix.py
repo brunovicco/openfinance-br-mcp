@@ -10,8 +10,17 @@ Example:
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, Field
+
+CanonicalAmount = Annotated[
+    str,
+    Field(
+        pattern=r"^\d+\.\d{2}$",
+        description="BRL amount serialized with exactly two decimal places.",
+    ),
+]
 
 
 class PixKeyType(StrEnum):
@@ -30,12 +39,14 @@ class PixPaymentStatus(StrEnum):
     strings defined by the Open Finance Brasil spec and must not be
     translated."""
 
+    RCVD = "RCVD"  # Received for asynchronous processing
+    ACCP = "ACCP"  # Accepted customer profile
+    ACPD = "ACPD"  # Accepted technical validation
     PDNG = "PDNG"  # Pending
-    PART = "PART"  # Partially accepted
-    ACSP = "ACSP"  # Accepted by the payer's bank
     ACSC = "ACSC"  # Completed successfully
-    ACCC = "ACCC"  # Confirmed by the receiving bank
     RJCT = "RJCT"  # Rejected
+    CANC = "CANC"  # Cancelled
+    SCHD = "SCHD"  # Scheduled
 
 
 class PixKey(BaseModel):
@@ -64,6 +75,7 @@ class PixPaymentRequest(BaseModel):
         debtor_account_id: Payer's account.
         description: Payment description/reason (QR code note).
         idempotency_key: Idempotency key to avoid duplicates.
+        consent_id: Payment consent authorizing this exact request.
     """
 
     amount: Decimal = Field(..., decimal_places=2, gt=Decimal("0"))
@@ -73,6 +85,10 @@ class PixPaymentRequest(BaseModel):
     description: str = Field(default="", max_length=140)
     idempotency_key: str = Field(
         ..., description="Client-generated UUID for idempotency"
+    )
+    consent_id: str | None = Field(
+        default=None,
+        description="Required outside mock mode; identifies the payment journey.",
     )
 
 

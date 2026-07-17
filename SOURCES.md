@@ -20,8 +20,8 @@ to," useful when auditing a specific piece of behavior.
     see `config.py`'s field docs).
 - **FAPI-BR security profile** - the Brazilian adaptation of the Financial
   -grade API (FAPI) 1.0 Advanced profile, mandating `private_key_jwt`
-  client authentication, PAR, JAR, PKCE, and mTLS or the alternative
-  DPoP/cert-bound-token mechanisms this project implements.
+  client authentication, PAR, JAR, PKCE, and mTLS. This project does not
+  currently implement DPoP for outbound Open Finance calls.
 
 ## IETF RFCs implemented
 

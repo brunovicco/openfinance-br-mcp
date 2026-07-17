@@ -118,10 +118,12 @@ def build_fapi_call_kwargs(access_token: str) -> dict[str, Any]:
 class BankEndpoints:
     """Per-API-family base URLs for one bank, resolved via the Directory.
 
-    Each field is the bare '/open-banking'-prefixed base URL for that
-    family, in the same shape ``DirectoryClient.resolve()`` returns as
-    ``ResolvedApi.base_url`` (e.g. 'https://host/open-banking') - NOT
-    yet including the family slug or version segment.
+    Read-family fields are the bare '/open-banking'-prefixed base URL in
+    the same shape ``DirectoryClient.resolve()`` returns as
+    ``ResolvedApi.base_url`` (e.g. 'https://host/open-banking'). Payment
+    fields are the exact collection endpoints published by the Directory,
+    because payments consent and PIX are distinct family registrations and
+    their version must not be reconstructed locally.
     ``DefaultOpenFinanceAdapter._client_base_url`` is solely
     responsible for appending those (via ``_FAMILY_VERSIONS``) to
     build the fully-versioned base URL a generated client actually
@@ -131,14 +133,15 @@ class BankEndpoints:
     strings here too.
 
     A ``None`` field means the Directory didn't publish (or failed to
-    resolve) that family for this bank - ``DefaultOpenFinanceAdapter``
-    falls back to its main ('accounts') base_url in that case, see
-    ``_url_for``.
+    resolve) that family for this bank. Real adapters configured in
+    fail-closed mode reject calls to that family; only the explicit
+    hardcoded-development fallback may reuse the adapter's default host.
 
     Attributes:
         accounts: Accounts base URL.
         credit_cards_accounts: Credit Cards Accounts base URL.
-        payments: Payments base URL.
+        payments_consents: Exact payment-consent collection endpoint.
+        payments_pix: Exact PIX-payment collection endpoint.
         consents: Consents base URL.
         bank_fixed_incomes: Bank Fixed Incomes base URL.
         funds: Funds base URL.
@@ -148,12 +151,18 @@ class BankEndpoints:
 
     accounts: str | None = None
     credit_cards_accounts: str | None = None
-    payments: str | None = None
+    payments_consents: str | None = None
+    payments_pix: str | None = None
     consents: str | None = None
     bank_fixed_incomes: str | None = None
     funds: str | None = None
     variable_incomes: str | None = None
     treasure_titles: str | None = None
+
+    def get(self, api_family_type: str) -> str | None:
+        """Returns the configured URL for a family, if available."""
+        value = getattr(self, api_family_type.replace("-", "_"), None)
+        return str(value) if value is not None else None
 
     def get_or(self, api_family_type: str, default: str) -> str:
         """Returns the resolved base URL for a family, or a fallback.
@@ -169,7 +178,7 @@ class BankEndpoints:
         Returns:
             The family's versioned base URL, or ``default``.
         """
-        value = getattr(self, api_family_type.replace("-", "_"), None)
+        value = self.get(api_family_type)
         return value if value is not None else default
 
 

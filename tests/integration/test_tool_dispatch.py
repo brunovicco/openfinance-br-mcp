@@ -259,7 +259,7 @@ async def test_initiate_pix_identical_replay_hits_cache():
         "creditor_key_type": "EMAIL",
         "debtor_account_id": "acc_1",
         "idempotency_key": "11111111-1111-1111-1111-111111111111",
-        "amount": 10.5,
+        "amount": "10.50",
         "creditor_key": "someone@example.com",
     }
 
@@ -296,13 +296,17 @@ async def test_initiate_pix_reused_key_different_payload_is_rejected():
     ) as session:
         first = await session.call_tool(
             "initiate_pix",
-            {**base_payload, "amount": 10.5, "creditor_key": "someone@example.com"},
+            {
+                **base_payload,
+                "amount": "10.50",
+                "creditor_key": "someone@example.com",
+            },
         )
         second = await session.call_tool(
             "initiate_pix",
             {
                 **base_payload,
-                "amount": 999.0,
+                "amount": "999.00",
                 "creditor_key": "someone-else@example.com",
             },
         )
@@ -338,11 +342,12 @@ async def test_initiate_pix_rejected_outside_mock_without_payment_consent(
         payload = {
             "subject_id": "12345678900",
             "bank": "nubank",
-            "amount": 10.5,
+            "amount": "10.50",
             "creditor_key": "someone@example.com",
             "creditor_key_type": "EMAIL",
             "debtor_account_id": "acc_1",
             "idempotency_key": "22222222-2222-2222-2222-222222222222",
+            "consent_id": "urn:bank:PC1",
         }
 
         async with create_connected_server_and_client_session(

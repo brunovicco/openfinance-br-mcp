@@ -5,7 +5,7 @@ metadata:
   namespace: fintech
   labels:
     app: openfinance-mcp
-    version: "0.1.0"
+    version: "0.2.0"
 spec:
   replicas: 2
   selector:
@@ -20,7 +20,7 @@ spec:
     metadata:
       labels:
         app: openfinance-mcp
-        version: "0.1.0"
+        version: "0.2.0"
       annotations:
         prometheus.io/scrape: "false"
     spec:
@@ -37,7 +37,7 @@ spec:
 
       containers:
         - name: openfinance-mcp
-          image: your-registry/openfinance-br-mcp:0.1.0
+          image: your-registry/openfinance-br-mcp:0.2.0
           imagePullPolicy: Always
 
           ports:
@@ -101,8 +101,6 @@ spec:
             items:
               - key: client-id
                 path: CLIENT_ID
-              - key: client-secret
-                path: CLIENT_SECRET
               - key: anthropic-api-key
                 path: ANTHROPIC_API_KEY
               - key: private-key.pem

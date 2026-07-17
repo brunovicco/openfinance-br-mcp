@@ -6,6 +6,8 @@ Notable project changes are documented here following
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-17
+
 Real-bank interoperability remains experimental and unvalidated. See
 [VALIDATION.md](VALIDATION.md) for the current validation boundary.
 
@@ -20,6 +22,8 @@ Real-bank interoperability remains experimental and unvalidated. See
 - MCP-principal-to-subject binding for authenticated Streamable HTTP clients.
 - Redis-backed state for tokens, consent, authorization sessions, and
   idempotency across replicas.
+- Automated, OIDC-based release workflow for PyPI, the MCP Registry, and
+  GitHub Releases, with pinned Actions and artifact smoke tests.
 
 ### Changed
 
@@ -39,15 +43,18 @@ Real-bank interoperability remains experimental and unvalidated. See
   to prevent cross-bank or cross-journey reuse.
 - Added required FAPI interaction headers and strengthened PAR/JAR, PKCE,
   audience, ACR, and ID-token validation.
-- Corrected payment consent to use the `payments` Directory family, Payments
-  API v4 paths, and `application/jwt` request and response bodies.
+- Corrected payment consent to use the separate `payments-consents` and
+  `payments-pix` Directory families and their exact Payments API v5 endpoints.
+- Verified payment response JWS before trusting bank data and bound each PIX
+  request to the exact, single-use consent payload and token namespace.
 - Corrected credit-card paths, monetary-value parsing, transaction fields, and
   payment-type enum values using the official schemas.
 - Made Directory resolution fail closed by default and resolved endpoints per
   API family instead of reusing the Accounts base URL.
 - Corrected MCP contracts for consent scope validation, idempotency metadata,
   and payment-only consent onboarding.
-- Required MCP OAuth when Streamable HTTP is exposed outside loopback.
+- Required MCP OAuth and an Origin allowlist when Streamable HTTP is exposed
+  outside loopback, and bind financial subjects to the token's `iss` + `sub`.
 
 ## [0.1.0] - 2026-07-13
 
@@ -62,4 +69,6 @@ Real-bank interoperability remains experimental and unvalidated. See
 - Optional DSPy transaction categorization, OpenTelemetry tracing, structured
   logging, Docker, Kubernetes, Redis, and CI configuration.
 
-[0.1.0]: https://github.com/brunovicco/openfinance-br-mcp/releases/tag/v0.1.0
+[Unreleased]: https://github.com/brunovicco/openfinance-br-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/brunovicco/openfinance-br-mcp/releases/tag/v0.2.0
+[0.1.0]: https://pypi.org/project/openfinance-br-mcp/0.1.0/
